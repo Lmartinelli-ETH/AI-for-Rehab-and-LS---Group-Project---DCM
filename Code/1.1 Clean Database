@@ -1,0 +1,751 @@
+import os
+import re
+import pandas as pd
+
+
+# =============================================================================
+# SETTINGS
+# =============================================================================
+
+INPUT_FILE = "./Data/ProCSM - raw.xlsx"
+INPUT_SHEET = "database"
+
+OUTPUT_DIR = "./Data/"
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, "ProCSM - cleaned.xlsx")
+
+
+# Gültige / kanonische Timepoints
+TIMEPOINTS = (
+    '_BL',
+    '_6mth',
+    '_12mth',
+    '_24mth',
+    '_36mth',
+    '_48mth',
+    '_60mth',
+)
+
+TIMEPOINT_VALUES = (
+    'BL',
+    '6mth',
+    '12mth',
+    '24mth',
+    '36mth',
+    '48mth',
+    '60mth',
+)
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def remove_dot_number_suffix(column_name):
+    if is_empty_or_unnamed(column_name):
+        return column_name
+
+    return re.sub(r'\.\d+$', '', str(column_name))
+
+
+def normalize_perc_max(column_name):
+    if is_empty_or_unnamed(column_name):
+        return column_name
+
+    column_name = str(column_name)
+
+    if not re.search(r'_perc_max$', column_name, flags=re.IGNORECASE):
+        return column_name
+
+    base = re.sub(r'_perc_max$', '', column_name, flags=re.IGNORECASE)
+    tp_pattern = r'(?:BL|6mth|12mth|24mth|36mth|48mth|60mth)'
+    timepoints = re.findall(
+        rf'_(?P<tp>{tp_pattern})(?=_|$)',
+        base,
+        flags=re.IGNORECASE,
+    )
+
+    if not timepoints:
+        return column_name
+
+    base = re.sub(
+        rf'_(?:{tp_pattern})(?=_|$)',
+        '',
+        base,
+        flags=re.IGNORECASE,
+    )
+
+    suffixes = []
+    seen = set()
+
+    for timepoint in timepoints:
+        if timepoint.lower() not in seen:
+            seen.add(timepoint.lower())
+            suffixes.append(canonical_suffix(timepoint))
+
+    return f"{base}_perc_max{''.join(suffixes)}"
+
+
+def is_empty_or_unnamed(column_name):
+    """
+    True für leere oder von pandas als 'Unnamed' erkannte Spalten.
+
+    Beispiele:
+        None
+        ''
+        '   '
+        'Unnamed: 25'
+    """
+
+    if column_name is None:
+        return True
+
+    column_name = str(column_name).strip()
+
+    if not column_name:
+        return True
+
+    return column_name.lower().startswith('unnamed:')
+
+
+def ends_with_selection(column_name):
+    """
+    Prüft, ob die Variable auf '_selection' endet.
+
+    Solche Variablen werden grundsätzlich geschützt:
+    Es darf KEIN zusätzlicher Timepoint angehängt werden.
+    """
+
+    if is_empty_or_unnamed(column_name):
+        return False
+
+    return bool(
+        re.search(
+            r'_selection$',
+            str(column_name),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def has_or_timepoint_expression(column_name):
+    """
+    Erkennt kombinierte Timepoint-Ausdrücke mit '_or_'.
+
+    Beispiele:
+        x_6mth_or_12mth
+        x_36mth_or_24mth
+        x_12mth_or_BL
+        x_12mth_or_bl
+        x_12mth_or_6mth_selection
+        x_12mth_or_6mth_bl
+
+    Sobald ein solcher Timepoint-Ausdruck vorhanden ist,
+    wird die Variable von der normalen Timepoint-Logik ausgeschlossen.
+    """
+
+    if is_empty_or_unnamed(column_name):
+        return False
+
+    tp = r'(?:BL|6mth|12mth|24mth|36mth|48mth|60mth)'
+
+    pattern = rf'_{tp}_or_{tp}'
+
+    return bool(
+        re.search(
+            pattern,
+            str(column_name),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def normalize_or_bl(column_name):
+    """
+    Sonderregel für kombinierte Timepoint-Ausdrücke:
+
+        _or_bl  -> _or_BL
+
+    Beispiel:
+        x_12mth_or_bl
+            ->
+        x_12mth_or_BL
+
+    WICHTIG:
+        Ein normales abschließendes '_bl' wird bei geschützten
+        OR-Ausdrücken NICHT verändert.
+
+    Beispiel:
+        x_12mth_or_6mth_bl
+            bleibt
+        x_12mth_or_6mth_bl
+    """
+
+    if is_empty_or_unnamed(column_name):
+        return column_name
+
+    return re.sub(
+        r'_or_bl(?=$|_selection$)',
+        '_or_BL',
+        str(column_name),
+        flags=re.IGNORECASE,
+    )
+
+
+def is_protected_column(column_name):
+    """
+    Prüft, ob eine Spalte von der normalen Timepoint-Bereinigung
+    ausgeschlossen werden soll.
+
+    Geschützt sind:
+
+    1. Variablen mit '_or_' zwischen Timepoints
+    2. Variablen, die auf '_selection' enden
+    """
+
+    return (
+        ends_with_selection(column_name)
+        or has_or_timepoint_expression(column_name)
+    )
+
+
+def normalize_simple_timepoint_suffix(column_name):
+    """
+    Normalisiert den Timepoint am ENDE einer normalen Variable.
+
+    Beispiele:
+        variable_bl
+            -> variable_BL
+
+        variable_Bl
+            -> variable_BL
+
+        variable_48MTH
+            -> variable_48mth
+
+        variable_12Mth
+            -> variable_12mth
+
+
+    WICHTIG:
+    Geschützte '_or_'- und '_selection'-Variablen werden hier
+    NICHT verändert.
+    """
+
+    if is_empty_or_unnamed(column_name):
+        return column_name
+
+    column_name = str(column_name)
+
+    if is_protected_column(column_name):
+        return column_name
+
+    # Baseline normalisieren
+    column_name = re.sub(
+        r'_bl$',
+        '_BL',
+        column_name,
+        flags=re.IGNORECASE,
+    )
+
+    # Follow-up-Timepoints normalisieren
+    column_name = re.sub(
+        r'_(6|12|24|36|48|60)mth$',
+        lambda match: f'_{match.group(1)}mth',
+        column_name,
+        flags=re.IGNORECASE,
+    )
+
+    return column_name
+
+
+def canonical_suffix(timepoint):
+    """
+    Gibt die kanonische Schreibweise eines Timepoints zurück.
+    """
+
+    if timepoint.lower() == 'bl':
+        return '_BL'
+
+    return f'_{timepoint.lower()}'
+
+
+def remove_duplicate_timepoint_suffix(column_name):
+    """
+    Entfernt doppelte identische Timepoint-Endungen.
+
+    Beispiele:
+        x_24mth_24mth
+            -> x_24mth
+
+        x_24MTH_24mth
+            -> x_24mth
+
+        x_BL_BL
+            -> x_BL
+
+        x_bl_BL
+            -> x_BL
+
+        x_48mth_48MTH
+            -> x_48mth
+
+    Auch mehrfache Wiederholungen werden reduziert:
+
+        x_24mth_24mth_24mth
+            -> x_24mth
+
+    Geschützte OR-/selection-Variablen werden NICHT verändert.
+    """
+
+    if is_empty_or_unnamed(column_name):
+        return column_name
+
+    column_name = str(column_name)
+
+    if is_protected_column(column_name):
+        return column_name
+
+    tp_pattern = r'(BL|6mth|12mth|24mth|36mth|48mth|60mth)'
+
+    while True:
+
+        match = re.search(
+            rf'_(?P<tp1>{tp_pattern})_(?P<tp2>{tp_pattern})$',
+            column_name,
+            flags=re.IGNORECASE,
+        )
+
+        if not match:
+            break
+
+        tp1 = match.group('tp1')
+        tp2 = match.group('tp2')
+
+        # Nur identische doppelte Timepoints entfernen
+        if tp1.lower() != tp2.lower():
+            break
+
+        suffix = canonical_suffix(tp1)
+
+        column_name = (
+            column_name[:match.start()]
+            + suffix
+        )
+
+    return column_name
+
+
+def clean_existing_suffix(column_name):
+    """
+    Bereinigt bereits vorhandene Endungen.
+
+    Reihenfolge:
+
+    1. leere / unnamed Spalten nicht verändern
+    2. OR-Sonderfall '_or_bl' -> '_or_BL'
+    3. geschützte Variablen danach nicht weiter bearbeiten
+    4. normale Timepoint-Endungen normalisieren
+    5. doppelte Endungen entfernen
+    """
+
+    if is_empty_or_unnamed(column_name):
+        return column_name
+
+    column_name = str(column_name)
+
+    column_name = remove_dot_number_suffix(column_name)
+    column_name = normalize_perc_max(column_name)
+
+    # -------------------------------------------------------------------------
+    # Sonderregel für OR-Konstruktionen
+    # -------------------------------------------------------------------------
+
+    column_name = normalize_or_bl(column_name)
+
+    # -------------------------------------------------------------------------
+    # OR- und selection-Spalten danach NICHT weiter verändern
+    # -------------------------------------------------------------------------
+
+    if is_protected_column(column_name):
+        return column_name
+
+    # -------------------------------------------------------------------------
+    # Normale Timepoint-Spalten
+    # -------------------------------------------------------------------------
+
+    previous = None
+
+    while previous != column_name:
+
+        previous = column_name
+
+        column_name = normalize_simple_timepoint_suffix(column_name)
+
+        column_name = remove_duplicate_timepoint_suffix(column_name)
+
+        # Nach Entfernen einer doppelten Endung erneut normalisieren
+        column_name = normalize_simple_timepoint_suffix(column_name)
+
+    return column_name
+
+
+def get_timepoint_suffix(column_name):
+    """
+    Gibt bei einer normalen Variable den kanonischen Timepoint zurück.
+
+    Beispiele:
+        abc_BL
+            -> '_BL'
+
+        abc_24mth
+            -> '_24mth'
+
+        abc
+            -> None
+
+
+    Geschützte Variablen liefern IMMER None.
+
+    Beispiele:
+        abc_12mth_or_6mth
+            -> None
+
+        abc_12mth_or_6mth_selection
+            -> None
+    """
+
+    if is_empty_or_unnamed(column_name):
+        return None
+
+    column_name = str(column_name)
+
+    if is_protected_column(column_name):
+        return None
+
+    column_name = normalize_simple_timepoint_suffix(column_name)
+
+    for suffix in TIMEPOINTS:
+
+        if column_name.endswith(suffix):
+            return suffix
+
+    return None
+
+
+# =============================================================================
+# LOAD DATA
+# =============================================================================
+
+data = pd.read_excel(
+    INPUT_FILE,
+    sheet_name=INPUT_SHEET,
+)
+
+original_columns = list(data.columns)
+
+
+# =============================================================================
+# PASS 1
+# NORMALIZE EXISTING SUFFIXES + REMOVE DUPLICATES
+# =============================================================================
+
+columns = []
+
+print('\n' + '=' * 100)
+print('PASS 1: NORMALIZE EXISTING TIMEPOINT ENDINGS')
+print('=' * 100)
+
+
+for column in original_columns:
+
+    # -------------------------------------------------------------------------
+    # Rule:
+    # empty / unnamed -> NEVER modify
+    # -------------------------------------------------------------------------
+
+    if is_empty_or_unnamed(column):
+
+        columns.append(column)
+
+        continue
+
+
+    # -------------------------------------------------------------------------
+    # Clean existing suffix
+    # -------------------------------------------------------------------------
+
+    cleaned = clean_existing_suffix(column)
+
+
+    # -------------------------------------------------------------------------
+    # Print every actual change
+    # -------------------------------------------------------------------------
+
+    if cleaned != column:
+
+        print('\nCHANGED:')
+
+        print(f'  OLD: {column}')
+        print(f'  NEW: {cleaned}')
+
+
+    columns.append(cleaned)
+
+
+# =============================================================================
+# FIX SPECIFIC KNOWN VARIABLE NAMES
+# =============================================================================
+
+SPECIFIC_RENAMES = {
+
+    'c4_5_peak_v_downwards_corr_all_mean_v2_BL':
+        'c4_5_peak_downwards_corr_all_mean_v2_BL',
+
+    # Standardize AUC corrallmean variable names
+    'C2_AUC_corrallmean_mm_BL': 'c2_auc_corrallmean_mm_BL',
+    'C3_AUC_corallmean_mm_BL': 'c3_auc_corrallmean_mm_BL',
+    'C4_AUC_corallmean_mm_BL': 'c4_auc_corrallmean_mm_BL',
+    'C5_auc_corallmean_mm_BL': 'c5_auc_corrallmean_mm_BL',
+    'C6_auc_corallmean_mm_BL': 'c6_auc_corrallmean_mm_BL',
+    'C7_auc_corallmean_mm_BL': 'c7_auc_corrallmean_mm_BL',
+
+}
+
+for i, column in enumerate(columns):
+
+    if column in SPECIFIC_RENAMES:
+
+        new_column = SPECIFIC_RENAMES[column]
+
+        print('\nSPECIFIC VARIABLE NAME FIX:')
+
+        print(f'  OLD: {column}')
+        print(f'  NEW: {new_column}')
+
+        columns[i] = new_column
+
+
+# =============================================================================
+# PASS 2
+# ADD MISSING SUFFIX BASED ON LEFT + RIGHT NEIGHBOUR
+# =============================================================================
+
+print('\n' + '=' * 100)
+print('PASS 2: CHECK COLUMNS WITHOUT TIMEPOINT ENDING')
+print('=' * 100)
+
+
+new_columns = columns.copy()
+
+
+for i, column in enumerate(columns):
+
+    # =========================================================================
+    # RULE 6:
+    # Empty / unnamed columns stay completely untouched
+    # =========================================================================
+
+    if is_empty_or_unnamed(column):
+        continue
+
+
+    # =========================================================================
+    # PROTECTED VARIABLES
+    #
+    # Never infer / append a timepoint for:
+    #
+    #   ..._selection
+    #
+    # or:
+    #
+    #   ..._12mth_or_6mth
+    #   ..._36mth_or_24mth
+    #   ..._12mth_or_BL
+    #   etc.
+    # =========================================================================
+
+    if re.search(r'_perc_max$', str(column), flags=re.IGNORECASE):
+        continue
+
+    if is_protected_column(column):
+
+        print('\nPROTECTED VARIABLE - NO TIMEPOINT ADDED:')
+        print(f'  FIELD: {column}')
+
+        continue
+
+
+    # =========================================================================
+    # Already has a valid normal timepoint
+    # =========================================================================
+
+    if get_timepoint_suffix(column) is not None:
+        continue
+
+
+    # =========================================================================
+    # First / last column:
+    # cannot compare TWO neighbours
+    # =========================================================================
+
+    if i == 0 or i == len(columns) - 1:
+
+        print(
+            '\nMISSING TIMEPOINT - '
+            'CANNOT DETERMINE FROM TWO NEIGHBOURS'
+        )
+
+        print(f'  FIELD: {column}')
+
+
+        if i > 0:
+            print(f'  Left : {columns[i - 1]}')
+
+
+        if i < len(columns) - 1:
+            print(f'  Right: {columns[i + 1]}')
+
+
+        continue
+
+
+    # =========================================================================
+    # Get neighbours
+    # =========================================================================
+
+    left_column = columns[i - 1]
+    right_column = columns[i + 1]
+
+
+    left_suffix = get_timepoint_suffix(left_column)
+    right_suffix = get_timepoint_suffix(right_column)
+
+
+    # =========================================================================
+    # Both neighbours have SAME valid normal timepoint
+    # =========================================================================
+
+    if (
+        left_suffix is not None
+        and right_suffix is not None
+        and left_suffix == right_suffix
+    ):
+
+        new_column = f'{column}{left_suffix}'
+
+
+        print('\nADDING TIMEPOINT FROM NEIGHBOURS:')
+
+        print(f'  Left : {left_column}')
+        print(f'  OLD  : {column}')
+        print(f'  Right: {right_column}')
+
+        print(f'  NEW  : {new_column}')
+
+
+        new_columns[i] = new_column
+
+
+    # =========================================================================
+    # Neighbours do not agree
+    # =========================================================================
+
+    else:
+
+        print('\nMISSING / AMBIGUOUS TIMEPOINT - NO CHANGE:')
+
+        print(f'  Left : {left_column}')
+        print(f'  FIELD: {column}')
+        print(f'  Right: {right_column}')
+
+        print(
+            '  Detected suffixes: '
+            f'left={left_suffix}, '
+            f'right={right_suffix}'
+        )
+
+
+# =============================================================================
+# APPLY CLEANED COLUMN NAMES
+# =============================================================================
+
+data.columns = new_columns
+
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+print('\n' + '=' * 100)
+print('SUMMARY')
+print('=' * 100)
+
+
+changes = 0
+
+
+for old, new in zip(original_columns, new_columns):
+
+    if old != new:
+
+        changes += 1
+
+        print(f'{old}  ->  {new}')
+
+
+print('\nColumns in data        :', len(data.columns))
+print('Columns in new_columns :', len(new_columns))
+print('Changed columns        :', changes)
+
+
+# =============================================================================
+# SECOND SHEET: JAN - ÜBERARBEITET
+# ADD _BL TO ALL VARIABLES
+# =============================================================================
+
+JAN_SHEET = "Jan's Data"
+
+jan_data = pd.read_excel(
+    INPUT_FILE,
+    sheet_name=JAN_SHEET,
+)
+
+jan_data.columns = [
+    column if is_empty_or_unnamed(column) else f'{column}_BL'
+    for column in jan_data.columns
+]
+
+# =============================================================================
+# WRITE CLEANED DATA TO EXCEL
+# =============================================================================
+
+os.makedirs(
+    OUTPUT_DIR,
+    exist_ok=True,
+)
+
+
+data.to_excel(
+    OUTPUT_FILE,
+    sheet_name=INPUT_SHEET,
+    index=False,
+)
+
+
+print(f'\nDatabase saved under: {OUTPUT_FILE}')
+
+
+with pd.ExcelWriter(
+    OUTPUT_FILE,
+    mode='a',
+    engine='openpyxl',
+    if_sheet_exists='replace',
+) as writer:
+    jan_data.to_excel(
+        writer,
+        sheet_name=JAN_SHEET,
+        index=False,
+    )
+
+print("\nAdding _BL to Jan's Sheet done.")
+print(f"\nJan's Sheet saved under: {OUTPUT_FILE}")
