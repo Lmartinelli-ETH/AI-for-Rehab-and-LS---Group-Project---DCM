@@ -1,0 +1,1620 @@
+from pathlib import Path
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle, FancyArrowPatch
+import textwrap
+
+
+# ============================================================
+# 1. Definitionen
+# ============================================================
+
+excel_file = Path('./Data/ProCSM - cleaned.xlsx')
+
+database_sheet = "database"
+analysis_sheet = "database"
+
+id_col = "record_id_BL"
+mri_col = "substudy___1_BL"
+
+LEV = ["c2_3", "c3_4", "c4_5", "c5_6"]
+MOTION_LEV = ["c2_3", "c3_4", "c4_5", "c5_6", "c6_7", "c7_1"]
+
+
+TIMEPOINTS = ("BL", "6mth", "12mth")
+
+
+strobe_columns = [
+    "record_id_BL",
+
+    # Sagittal Amplitude
+    "c2_amplitude_hf_BL",
+    "c3_amplitude_hf_BL",
+    "c4_amplitude_hf_BL",
+    "c5_amplitude_hf_BL",
+    "c6_amplitude_hf_BL",
+    "c7_amplitude_hf_BL",
+
+    # Sagittal Displacement
+    "c2_auc_corr_mm_hf_BL",
+    "c3_auc_corr_mm_hf_BL",
+    "c4_auc_corr_mm_hf_BL",
+    "c5_auc_corr_mm_hf_BL",
+    "c6_auc_corr_mm_hf_BL",
+    "c7_auc_corr_mm_hf_BL",
+
+    # Spinal Cord Motion - Velocity
+    "c2_up_corr_hf_BL",
+    "c3_up_corr_hf_BL",
+    "c4_up_corr_hf_BL",
+    "c5_up_corr_hf_BL",
+    "c6_up_corr_hf_BL",
+    "c7_up_corr_hf_BL",
+
+    "c2_down_corr_hf_BL",
+    "c3_down_corr_hf_BL",
+    "c4_down_corr_hf_BL",
+    "c5_down_corr_hf_BL",
+    "c6_down_corr_hf_BL",
+    "c7_down_corr_hf_BL",
+
+    # MRI Findings / Scores
+    "number_stenosis_BL",
+    "maximum_stenosis_BL",
+
+    # Clinical Variables
+    "total_mjoa_BL",
+    "motor_dysfunction_UE_BL",
+    "motor_dysfunction_LE_BL",
+    "sensory_dysfunction_UE_BL",
+    "sphincter_dysfunction_BL",
+
+    "nurick_BL",
+
+    "upper_extrem_motor_total_BL",
+    "lighttouch_total_BL",
+    "UELT_C4_T1_BL",
+    "pinprick_total_BL",
+    "UEPP_C4_T1_BL",
+
+]
+
+# No additional variables are needed for the new complete-case population.
+extra_output_columns = []
+
+# Die ID bleibt unverändert.
+# Alle anderen STROBE-Variablen werden für BL, 6mth und 12mth geladen.
+def expand_timepoints(columns):
+    """Erweitert _BL-Variablen auf alle drei Zeitpunkte."""
+    expanded = []
+
+    for col in columns:
+        if col.endswith("_BL"):
+            base = col[:-3]
+            expanded.extend(
+                f"{base}_{timepoint}"
+                for timepoint in TIMEPOINTS
+            )
+        else:
+            expanded.append(col)
+
+    return list(dict.fromkeys(expanded))
+
+
+strobe_columns = [
+    id_col,
+    *expand_timepoints(
+        col for col in strobe_columns
+        if col != id_col
+    ),
+]
+
+output_columns = list(dict.fromkeys(
+    strobe_columns + extra_output_columns
+))
+
+required_columns = [
+    col for col in strobe_columns
+    if col != id_col
+]
+
+
+
+# ============================================================
+# 2. Output-Pfade
+# ============================================================
+
+# output_dir = Path("./Final Documents - shared with MH/Research Intern/2. Results/1. Cohort Definition/1.2 mJOA-Filtered Population")
+output_dir = Path("./Test/1.2 Defining Cohort/")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# Final Population
+# output_final_population_file = ("./sag_restricted.xlsx")
+output_final_population_file = (
+    output_dir / "final_population.xlsx"
+    )
+
+# Additional Output Files
+output_missing_file = (
+    output_dir / "missing_values_sag.xlsx"
+)
+
+output_flow_summary_file = (
+    output_dir / "strobe_groupe_sag.xlsx"
+)
+
+output_strobe_file = (
+    output_dir / "strobe_diagram_sag.png"
+)
+
+output_mri_population_file = (
+    output_dir / "mri_population.xlsx"
+)
+
+
+# ============================================================
+# 3. Daten einlesen
+# ============================================================
+
+# Alle Sheets einmal laden. Dadurch können Variablen auch dann gefunden
+# werden, wenn sie nicht im Sheet "important_columns" liegen.
+all_sheets = pd.read_excel(
+    excel_file,
+    sheet_name=None
+)
+
+
+def normalize_excel_header(name):
+    """
+    Excel-Spaltennamen robust vereinheitlichen.
+
+    Entfernt insbesondere unsichtbare / versehentliche Leerzeichen,
+    Zeilenumbrüche und Non-Breaking Spaces, die in Excel-Headern
+    vorkommen können. Die eigentlichen Variablennamen werden nicht
+    verändert.
+    """
+
+    return (
+        str(name)
+        .replace("\xa0", " ")
+        .replace("\u200b", "")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .replace("\t", " ")
+        .strip()
+    )
+
+
+def clean_sheet_columns(sheet_df):
+    """Bereinigt nur die Excel-Header, nicht die Daten selbst."""
+
+    sheet_df = sheet_df.copy()
+    sheet_df.columns = [
+        normalize_excel_header(col)
+        for col in sheet_df.columns
+    ]
+
+    return sheet_df
+
+
+# Header in allen Sheets bereinigen.
+all_sheets_lookup = {
+    sheet_name: clean_sheet_columns(sheet_df)
+    for sheet_name, sheet_df in all_sheets.items()
+}
+
+
+# Die beiden bisher verwendeten Sheets bleiben die Hauptquellen.
+df_database = all_sheets_lookup[database_sheet].copy()
+df_analysis_all = all_sheets_lookup[analysis_sheet].copy()
+
+"""
+df_d = all_sheets_lookup[database_sheet].copy()
+df_all = all_sheets_lookup[analysis_sheet].copy()
+
+df_database = df_d[df_d['maximum_stenosis_BL']==4]
+df_analysis_all = df_all[df_all['maximum_stenosis_BL']==4]
+"""
+
+# --------------------------------------------------------------------
+# Gewünschte Variablen im Workbook finden
+# --------------------------------------------------------------------
+# Reihenfolge der Suche:
+# 1) important_columns
+# 2) database
+# 3) übrige Sheets
+#
+# Zusätzlich wird gross-/kleinschreibungsunabhängig gesucht.
+# Dadurch wird z.B. C2_amp... auch gefunden, falls der Excel-Header
+# c2_amp... lautet.
+# --------------------------------------------------------------------
+
+source_sheet_order = [
+    analysis_sheet,
+    database_sheet,
+] + [
+    sheet_name
+    for sheet_name in all_sheets_lookup.keys()
+    if sheet_name not in {analysis_sheet, database_sheet}
+]
+
+
+def resolve_column_in_workbook(requested_col):
+    """
+    Sucht eine Variable in allen Sheets.
+
+    Rückgabe:
+        (sheet_name, actual_column_name)
+    oder
+        (None, None)
+    """
+
+    requested_key = normalize_excel_header(
+        requested_col
+    ).casefold()
+
+    for sheet_name in source_sheet_order:
+
+        sheet_df = all_sheets_lookup[sheet_name]
+
+        column_map = {
+            normalize_excel_header(col).casefold(): col
+            for col in sheet_df.columns
+        }
+
+        if requested_key in column_map:
+
+            actual_col = column_map[requested_key]
+
+            # Für das spätere Mapping brauchen wir record_id_BL
+            # im selben Sheet.
+            id_map = {
+                normalize_excel_header(col).casefold(): col
+                for col in sheet_df.columns
+            }
+
+            id_key = normalize_excel_header(id_col).casefold()
+
+            if id_key in id_map:
+                return (
+                    sheet_name,
+                    actual_col,
+                    id_map[id_key],
+                )
+
+    return None, None, None
+
+
+# Start mit allen IDs aus important_columns, falls vorhanden.
+# Andernfalls werden die IDs aus der database verwendet.
+if id_col in df_analysis_all.columns:
+    df_analysis = (
+        df_analysis_all[[id_col]]
+        .drop_duplicates(subset=id_col)
+        .copy()
+    )
+else:
+    df_analysis = (
+        df_database[[id_col]]
+        .drop_duplicates(subset=id_col)
+        .copy()
+    )
+
+
+resolved_columns = {}
+missing_required_columns = []
+
+
+for requested_col in output_columns:
+
+    if requested_col == id_col:
+        continue
+
+    source_sheet, actual_col, source_id_col = (
+        resolve_column_in_workbook(
+            requested_col
+        )
+    )
+
+    if source_sheet is None:
+        missing_required_columns.append(
+            requested_col
+        )
+        continue
+
+    resolved_columns[requested_col] = {
+        "sheet": source_sheet,
+        "actual_column": actual_col,
+    }
+
+    source_df = (
+        all_sheets_lookup[source_sheet][
+            [source_id_col, actual_col]
+        ]
+        .copy()
+    )
+
+    # Auf die im restlichen Code verwendeten Standardnamen bringen.
+    source_df = source_df.rename(
+        columns={
+            source_id_col: id_col,
+            actual_col: requested_col,
+        }
+    )
+
+    # Ein Datensatz pro Person für den Merge.
+    # Falls tatsächlich doppelte IDs vorhanden sind, wird der erste
+    # Eintrag verwendet, wie auch bisher bei df_mri_info.
+    source_df = source_df.drop_duplicates(
+        subset=id_col
+    )
+
+    df_analysis = df_analysis.merge(
+        source_df,
+        on=id_col,
+        how="left"
+    )
+
+
+print("\n========================================")
+print("VARIABLE SOURCES")
+print("========================================")
+
+for requested_col, source_info in resolved_columns.items():
+    print(
+        f"{requested_col}: "
+        f"{source_info['sheet']} -> "
+        f"{source_info['actual_column']}"
+    )
+
+
+if missing_required_columns:
+
+    print("\nCould not resolve these variables anywhere in the workbook:")
+
+    for col in missing_required_columns:
+        print(f"  - {col}")
+
+    raise KeyError(
+        "The following required variables could not be found "
+        "in any Excel sheet after cleaning the column names:\n"
+        + "\n".join(missing_required_columns)
+    )
+
+print("========================================\n")
+
+
+# ============================================================
+# 4. Startpopulation definieren
+#    Box 1: Complete data
+# ============================================================
+
+all_record_ids = (
+    df_database[id_col]
+    .dropna()
+    .unique()
+)
+
+df_all_ids = pd.DataFrame({
+    id_col: all_record_ids
+})
+
+
+# MRI-Information aus der database an die IDs hängen
+df_mri_info = (
+    df_database[
+        [id_col, mri_col]
+    ]
+    .drop_duplicates(subset=id_col)
+    .copy()
+)
+
+
+# ============================================================
+# 5. Analysis-Daten auf Startpopulation mappen
+#    Wichtig: left merge, damit alle IDs erhalten bleiben
+# ============================================================
+
+df = df_all_ids.merge(
+    df_mri_info,
+    on=id_col,
+    how="left"
+)
+
+df = df.merge(
+    df_analysis,
+    on=id_col,
+    how="left"
+)
+
+
+n_initial = len(df)
+
+
+# ============================================================
+# 5a. MRI-Step definieren
+#     Box 2: MRI done + vollständige MRI Findings / Scores
+# ============================================================
+
+mri_value_columns = [
+    "number_stenosis_BL",
+    "maximum_stenosis_BL",
+]
+
+n_before_mri = len(df)
+
+# Zuerst Personen ohne MRI ausschliessen.
+mri_not_done_mask = (
+    df[mri_col] != 1
+)
+
+n_excluded_mri_not_done = int(
+    mri_not_done_mask.sum()
+)
+
+df_mri_step = (
+    df
+    .loc[~mri_not_done_mask]
+    .copy()
+)
+
+# Danach innerhalb der MRI-Population die beiden MRI-Werte prüfen.
+mri_values_missing_mask = (
+    df_mri_step[mri_value_columns]
+    .isna()
+    .any(axis=1)
+)
+
+n_excluded_mri_values = int(
+    mri_values_missing_mask.sum()
+)
+
+df_mri_step = (
+    df_mri_step
+    .loc[~mri_values_missing_mask]
+    .copy()
+)
+
+n_after_mri = len(df_mri_step)
+
+
+# MRI-Population separat speichern
+df_mri_step.to_excel(
+    output_mri_population_file,
+    sheet_name="baseline_population",
+    index=False
+)
+
+
+# ============================================================
+# 6. Missing Values analysieren
+# ============================================================
+
+missing_summary = pd.DataFrame({
+    "column": required_columns,
+
+    "missing_n": [
+        df_mri_step[col].isna().sum()
+        for col in required_columns
+    ],
+
+    "available_n": [
+        df_mri_step[col].notna().sum()
+        for col in required_columns
+    ],
+
+    "missing_percent": [
+        df_mri_step[col].isna().mean() * 100
+        for col in required_columns
+    ],
+})
+
+
+missing_summary.to_excel(
+    output_missing_file,
+    index=False
+)
+
+
+# ============================================================
+# 7. Gruppierung für STROBE-Diagramm
+# ============================================================
+
+df_step = df_mri_step.copy()
+
+flow_rows = [{
+    "group": "MRI",
+    "n_before": n_before_mri,
+    "n_excluded": (
+        n_excluded_mri_not_done
+        + n_excluded_mri_values
+    ),
+    "n_after": n_after_mri,
+    "missing_by_subgroup": {
+        "MRI not done": n_excluded_mri_not_done,
+        "MRI Findings / Scores": n_excluded_mri_values,
+    },
+    "columns": (
+        mri_col
+        + ", "
+        + ", ".join(mri_value_columns)
+    ),
+}]
+
+
+# ============================================================
+# 8. Stepwise Exclusions berechnen
+# ============================================================
+
+strobe_groups = {
+    "Spinal Cord Motion Values": {
+
+        "Sagittal Measurements Only": [
+            # Upstream Velocity  
+            "c2_up_corr_hf_BL",
+            "c3_up_corr_hf_BL",
+            "c4_up_corr_hf_BL",
+            "c5_up_corr_hf_BL",
+            "c6_up_corr_hf_BL",
+            "c7_up_corr_hf_BL",
+
+            # Downstream Velocity  
+            "c2_down_corr_hf_BL",
+            "c3_down_corr_hf_BL",
+            "c4_down_corr_hf_BL",
+            "c5_down_corr_hf_BL",
+            "c6_down_corr_hf_BL",
+            "c6_down_corr_hf_BL",   
+
+            # Sagittal Amplitude
+            "c2_amplitude_hf_BL",
+            "c3_amplitude_hf_BL",
+            "c4_amplitude_hf_BL",
+            "c5_amplitude_hf_BL",
+            "c6_amplitude_hf_BL",
+            "c7_amplitude_hf_BL",
+
+            # Sagittal Displacement
+            "c2_auc_corr_mm_hf_BL",
+            "c3_auc_corr_mm_hf_BL",
+            "c4_auc_corr_mm_hf_BL",
+            "c5_auc_corr_mm_hf_BL",
+            "c6_auc_corr_mm_hf_BL",
+            "c7_auc_corr_mm_hf_BL",
+        ],
+    },
+
+    "Clinical Variables": {
+        "mJOA": [
+            "total_mjoa_BL",
+            "motor_dysfunction_UE_BL",
+            "motor_dysfunction_LE_BL",
+            "sensory_dysfunction_UE_BL",
+            "sphincter_dysfunction_BL",
+        ],
+
+        "Nurick": [
+            "nurick_BL",
+        ],
+
+        "ASIA": [
+            "upper_extrem_motor_total_BL",
+            "lighttouch_total_BL",
+            "UELT_C4_T1_BL",
+            "pinprick_total_BL",
+            "UEPP_C4_T1_BL",
+        ],
+    }
+
+}
+
+
+# Alle Variablen in jeder STROBE-Subgruppe
+# automatisch auf BL, 6mth und 12mth erweitern.
+strobe_groups = {
+    group_name: {
+        subgroup_name: expand_timepoints(subgroup_cols)
+        for subgroup_name, subgroup_cols in subgroups.items()
+    }
+    for group_name, subgroups in strobe_groups.items()
+}
+
+
+# ============================================================
+# Stepwise Filtering
+# ============================================================
+# Vor dem Filtering prüfen, ob alle benötigten
+# STROBE-Variablen tatsächlich geladen wurden.
+
+all_strobe_filter_columns = list(dict.fromkeys(
+    col
+    for subgroups in strobe_groups.values()
+    for subgroup_cols in subgroups.values()
+    for col in subgroup_cols
+))
+
+missing_filter_columns = [
+    col for col in all_strobe_filter_columns
+    if col not in df_step.columns
+]
+
+if missing_filter_columns:
+    raise KeyError(
+        "Required STROBE filtering columns are missing:\n"
+        + "\n".join(missing_filter_columns)
+    )
+
+
+# Bestehendes Filtering unverändert fortsetzen
+for group_name, subgroups in strobe_groups.items():
+
+    group_cols = [
+        col
+        for subgroup_cols in subgroups.values()
+        for col in subgroup_cols
+        if col in df_step.columns
+    ]
+
+    n_before = len(df_step)
+
+    # Ausschluss, wenn mindestens eine Variable der Gruppe fehlt
+    missing_mask = (
+        df_step[group_cols]
+        .isna()
+        .any(axis=1)
+    )
+
+    n_excluded = int(
+        missing_mask.sum()
+    )
+
+
+    # Missing Values innerhalb der Subgruppen
+    # sequenziell auswerten, damit jede Person innerhalb derselben
+    # Hauptgruppe nur genau einer Subgruppe zugeordnet wird.
+    missing_by_subgroup = {}
+
+    df_subgroup_step = df_step.copy()
+
+    for subgroup_name, subgroup_cols in subgroups.items():
+
+        subgroup_cols = [
+            col
+            for col in subgroup_cols
+            if col in df_subgroup_step.columns
+        ]
+
+        if len(subgroup_cols) == 0:
+            continue
+
+        subgroup_missing_mask = (
+            df_subgroup_step[subgroup_cols]
+            .isna()
+            .any(axis=1)
+        )
+
+        missing_by_subgroup[subgroup_name] = int(
+            subgroup_missing_mask.sum()
+        )
+
+        # Bereits dieser Subgruppe zugeordnete Personen entfernen,
+        # bevor die nächste Subgruppe geprüft wird.
+        df_subgroup_step = (
+            df_subgroup_step
+            .loc[~subgroup_missing_mask]
+            .copy()
+        )
+
+
+    # Personen mit fehlenden Daten entfernen
+    df_step = (
+        df_step
+        .loc[~missing_mask]
+        .copy()
+    )
+
+    n_after = len(df_step)
+
+
+    flow_rows.append({
+        "group": group_name,
+        "n_before": n_before,
+        "n_excluded": n_excluded,
+        "n_after": n_after,
+        "missing_by_subgroup": missing_by_subgroup,
+        "columns": ", ".join(group_cols),
+    })
+
+
+# ============================================================
+# mJOA Restriction
+# ============================================================
+
+n_before_mjoa = len(df_step)
+
+mjoa_exclusion_mask = (
+    df_step["total_mjoa_BL"] >= 18
+)
+
+n_excluded_mjoa = int(
+    mjoa_exclusion_mask.sum()
+)
+
+df_step = (
+    df_step
+    .loc[~mjoa_exclusion_mask]
+    .copy()
+)
+
+n_after_mjoa = len(df_step)
+
+
+flow_rows.append({
+    "group": "mJOA Restriction",
+    "n_before": n_before_mjoa,
+    "n_excluded": n_excluded_mjoa,
+    "n_after": n_after_mjoa,
+    "missing_by_subgroup": {'mJOA = 18': n_excluded_mjoa},
+    "columns": "total_mjoa_BL",
+})
+
+
+# ============================================================
+# Flow Summary speichern
+# ============================================================
+
+flow_summary_rows = []
+
+
+for row in flow_rows:
+
+    for subgroup, missing_n in (
+        row["missing_by_subgroup"].items()
+    ):
+
+        flow_summary_rows.append({
+
+            "group": row["group"],
+
+            "n_before": row["n_before"],
+
+            "n_excluded_group": (
+                row["n_excluded"]
+            ),
+
+            "n_after": row["n_after"],
+
+            "subgroup": subgroup,
+
+            "missing_n": missing_n,
+        })
+
+
+flow_summary_df = pd.DataFrame(
+    flow_summary_rows
+)
+
+
+# ============================================================
+# Finale Population
+# nach vollständigem Complete-Case-Filtering
+# ============================================================
+
+n_final = len(df_step)
+
+df_complete = df_step.copy()
+
+
+flow_summary_df.to_excel(
+    output_flow_summary_file,
+    index=False
+)
+
+
+print("\n========================================")
+print("FINAL COMPLETE-CASE POPULATION")
+print("========================================")
+
+print(
+    f"n = {n_final}"
+)
+
+print("\nRecord IDs:")
+
+print(
+    df_complete[id_col].to_list()
+)
+
+print("\nComplete-case population:")
+
+print(
+    df_complete
+)
+
+print(
+    "========================================\n"
+)
+
+
+# ============================================================
+# 9. Finale Population speichern – alle Sheets filtern
+# ============================================================
+
+def normalize_id(series):
+
+    return (
+        pd.to_numeric(
+            series,
+            errors="coerce"
+        )
+        .astype("Int64")
+        .astype(str)
+    )
+
+
+final_record_ids = set(
+    normalize_id(
+        df_complete[id_col]
+    )
+)
+
+
+print(
+    "Final Record IDs:"
+)
+
+print(
+    final_record_ids
+)
+
+
+# Alle Sheets aus Originaldatei laden
+all_sheets = pd.read_excel(
+    excel_file,
+    sheet_name=None
+)
+
+
+with pd.ExcelWriter(
+    output_final_population_file,
+    engine="openpyxl"
+) as writer:
+
+
+    for sheet_name, sheet_df in all_sheets.items():
+
+        sheet_df = sheet_df.copy()
+
+
+        # Nur Sheets filtern,
+        # die record_id_BL enthalten
+        if id_col in sheet_df.columns:
+
+            sheet_ids = normalize_id(
+                sheet_df[id_col]
+            )
+
+
+            sheet_final = sheet_df[
+                sheet_ids.isin(
+                    final_record_ids
+                )
+            ].copy()
+
+
+        else:
+
+            # Falls ein Sheet keine record_id_BL hat:
+            # unverändert übernehmen
+            sheet_final = sheet_df.copy()
+
+
+        # Excel-Sheetnamen dürfen
+        # maximal 31 Zeichen haben
+        safe_sheet_name = (
+            str(sheet_name)[:31]
+        )
+
+
+        sheet_final.to_excel(
+            writer,
+            sheet_name=safe_sheet_name,
+            index=False
+        )
+
+
+    # Zusätzlich das berechnete
+    # Complete-Case-Sheet speichern
+    df_complete.to_excel(
+        writer,
+        sheet_name="clinical_values",
+        index=False
+    )
+
+
+# ============================================================
+# 10. Plot-Hilfsfunktionen
+# ============================================================
+
+MAIN_FONT_SIZE = 15.5
+DETAIL_FONT_SIZE = 14.5
+FONT_FAMILY = "DejaVu Sans"
+
+STEP_BOX_COLOR = "#F2F2F2"
+FINAL_BOX_COLOR = "#D9EAD3"
+
+LINE_LW = 1.1
+
+# ------------------------------------------------------------
+# Layout-Prinzip
+# ------------------------------------------------------------
+# Sämtliche vertikalen Grössen werden zuerst in typografischen
+# Punkten berechnet. Dadurch sind Text -> Rand und Box -> Box
+# unabhängig von der späteren Figure-Höhe konsistent.
+#
+# BOX_PADDING_PT gilt pro Seite:
+# oben, unten, links und rechts.
+# ------------------------------------------------------------
+
+BOX_PADDING_PT = 10
+LEFT_WRAP_WIDTH = 42
+RIGHT_TITLE_WRAP_WIDTH = 43
+RIGHT_DETAIL_WRAP_WIDTH = 46
+
+LEFT_LINE_SPACING = 1.05
+RIGHT_LINE_SPACING = 1.18
+
+# Zusätzlicher Freiraum zwischen rechter Ausschlussbox und den
+# beiden benachbarten linken Kohortenboxen.
+RIGHT_BOX_CLEARANCE_PT = 14
+
+# Minimaler vertikaler Zwischenraum zwischen linken Boxen.
+MIN_GAP_PT = 34
+
+
+# ============================================================
+# Hilfsfunktionen
+# ============================================================
+
+def clean_var_name(var):
+
+    return (
+        var
+        .replace("_BL", "")
+        .replace("_", " ")
+    )
+
+
+def format_missing_details(
+    missing_by_variable
+):
+
+    lines = []
+
+    for var, n_missing in (
+        missing_by_variable.items()
+    ):
+
+        if n_missing > 0:
+
+            lines.append(
+                f"• {clean_var_name(var)}: "
+                f"n = {n_missing}"
+            )
+
+    return lines
+
+
+def wrap_text(
+    text,
+    width=34
+):
+    """
+    Bricht Text sauber um. Bereits vorhandene Zeilenumbrüche
+    werden beibehalten.
+    """
+
+    wrapped_lines = []
+
+    for line in str(text).split("\n"):
+
+        if line.strip() == "":
+            wrapped_lines.append("")
+
+        else:
+            wrapped_lines.extend(
+                textwrap.wrap(
+                    line,
+                    width=width,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                    replace_whitespace=False
+                )
+            )
+
+    return "\n".join(wrapped_lines)
+
+
+def count_text_lines(text):
+    """Anzahl der tatsächlich zu zeichnenden Textzeilen."""
+
+    return max(
+        1,
+        len(str(text).split("\n"))
+    )
+
+
+def text_block_height_pt(
+    text,
+    fontsize,
+    linespacing
+):
+    """
+    Robuste Textblock-Höhe in Punkten.
+
+    Wichtig: Hier wird absichtlich nicht die temporäre Matplotlib-
+    Bounding-Box verwendet. Deren Höhe kann sich nach
+    subplots_adjust / bbox_inches='tight' verändern und führte zuvor
+    dazu, dass die letzte Textzeile aus einzelnen Boxen herausragte.
+
+    Die Zeilenhöhe wird direkt aus Schriftgrösse und line spacing
+    bestimmt. Ein kleiner Descent-Sicherheitszuschlag sorgt dafür,
+    dass Zeichen wie g, p, y usw. sicher innerhalb der Box bleiben.
+    """
+
+    n_lines = count_text_lines(text)
+
+    line_height_pt = (
+        fontsize
+        * linespacing
+    )
+
+    descent_safety_pt = fontsize * 0.18
+
+    return (
+        n_lines * line_height_pt
+        + descent_safety_pt
+    )
+
+
+def box_height_pt(
+    text,
+    fontsize,
+    linespacing,
+    padding_pt=BOX_PADDING_PT
+):
+    """
+    Boxhöhe in Punkten:
+    Texthöhe + gleicher Innenabstand oben und unten.
+    """
+
+    return (
+        text_block_height_pt(
+            text=text,
+            fontsize=fontsize,
+            linespacing=linespacing
+        )
+        + 2 * padding_pt
+    )
+
+
+def pt_to_axes_x(ax, points):
+    """Punkte -> x-Achsenkoordinaten."""
+
+    pixels = points * ax.figure.dpi / 72
+    return pixels / ax.bbox.width
+
+
+def pt_to_axes_y(ax, points):
+    """Punkte -> y-Achsenkoordinaten."""
+
+    pixels = points * ax.figure.dpi / 72
+    return pixels / ax.bbox.height
+
+
+def draw_rect_box(
+    ax,
+    x,
+    y,
+    w,
+    h,
+    text,
+    fontsize=MAIN_FONT_SIZE,
+    lw=1.6,
+    ha="center",
+    facecolor="white",
+    linespacing=LEFT_LINE_SPACING
+):
+
+    rect = Rectangle(
+        (x, y),
+        w,
+        h,
+        facecolor=facecolor,
+        edgecolor="black",
+        linewidth=lw
+    )
+
+    ax.add_patch(rect)
+
+    pad_x = pt_to_axes_x(
+        ax,
+        BOX_PADDING_PT
+    )
+
+    if ha == "left":
+        text_x = x + pad_x
+
+    elif ha == "right":
+        text_x = x + w - pad_x
+
+    else:
+        text_x = x + w / 2
+
+    ax.text(
+        text_x,
+        y + h / 2 - 0.0025,
+        text,
+        ha=ha,
+        va="center",
+        fontsize=fontsize,
+        linespacing=linespacing,
+        fontfamily=FONT_FAMILY,
+        clip_on=False
+    )
+
+
+def draw_exclusion_box(
+    ax,
+    x,
+    y,
+    w,
+    h,
+    text,
+    lw=1.4,
+    fontsize=DETAIL_FONT_SIZE,
+    linespacing=RIGHT_LINE_SPACING
+):
+
+    rect = Rectangle(
+        (x, y-0.01),
+        w,
+        h+0.02,
+        facecolor="white",
+        edgecolor="black",
+        linewidth=lw
+    )
+
+    ax.add_patch(rect)
+
+    pad_x = pt_to_axes_x(
+        ax,
+        BOX_PADDING_PT
+    )
+
+    pad_y = pt_to_axes_y(
+        ax,
+        BOX_PADDING_PT,
+    )
+
+    ax.text(
+        x + pad_x,
+        y + h+0.005 - pad_y,
+        text,
+        ha="left",
+        va="top",
+        fontsize=fontsize,
+        linespacing=linespacing,
+        fontfamily=FONT_FAMILY,
+        clip_on=False
+    )
+
+
+def draw_arrow(
+    ax,
+    x1,
+    y1,
+    x2,
+    y2,
+    lw=1.2,
+    mutation_scale=13
+):
+
+    arrow = FancyArrowPatch(
+        (x1, y1),
+        (x2, y2),
+        arrowstyle="-|>",
+        mutation_scale=mutation_scale,
+        linewidth=lw,
+        color="black",
+        shrinkA=0,
+        shrinkB=0
+    )
+
+    ax.add_patch(arrow)
+
+
+# ============================================================
+# 11. STROBE-Diagramm erstellen
+# ============================================================
+
+# Alle drei Filterschritte zeichnen, auch wenn in einem Schritt n = 0
+# ausgeschlossen werden. Dadurch bleiben immer genau vier linke Boxen:
+# Complete data -> MRI -> Spinal Cord Motion -> Clinical Variables.
+flow_rows_plot = flow_rows.copy()
+
+
+# ============================================================
+# Texte vollständig vorbereiten
+# ============================================================
+
+start_text = (
+    "Initial study population\n"
+    f"n = {n_initial}"
+)
+
+final_text = (
+    "Final study population\n"
+    f"n = {n_final}"
+)
+
+for row in flow_rows_plot:
+
+    if row["group"] == "MRI":
+
+        left_text = (
+            "MRI measurements done and complete "
+            "MRI findings / scores\n"
+            f"n = {row['n_after']}"
+        )
+
+    elif row["group"] == "Spinal Cord Motion":
+
+        left_text = (
+            "Cohort after exclusion of patients "
+            "with missing Spinal Cord Motion data\n"
+            f"n = {row['n_after']}"
+        )
+
+    elif row["group"] == "mJOA Restriction":
+
+        left_text = final_text
+
+    else:
+
+        left_text = (
+            "Cohort after exclusion of patients "
+            f"with missing {row['group']}\n"
+            f"n = {row['n_after']}"
+        )
+
+    row["left_text"] = wrap_text(
+        left_text,
+        width=LEFT_WRAP_WIDTH
+    )
+
+
+    if row["group"] == "MRI":
+        title = wrap_text(
+            "Excluded due to MRI criteria:",
+            width=RIGHT_TITLE_WRAP_WIDTH
+        )
+    elif row["group"] == "mJOA Restriction":
+        title = wrap_text(
+            "Excluded due to mJOA restriction:",
+            width=RIGHT_TITLE_WRAP_WIDTH
+        )
+    else:
+        title = wrap_text(
+            f"Excluded due to missing {row['group']}:",
+            width=RIGHT_TITLE_WRAP_WIDTH
+        )
+
+    details = format_missing_details(
+        row["missing_by_subgroup"]
+    )
+
+    detail_text = "\n".join(
+        wrap_text(
+            line,
+            width=RIGHT_DETAIL_WRAP_WIDTH
+        )
+        for line in details
+    )
+
+    row["right_text"] = (
+        title
+    )
+
+    if detail_text.strip():
+        row["right_text"] += "\n" + detail_text
+
+
+
+# ============================================================
+# Grössen zunächst vollständig in Punkten bestimmen
+# ============================================================
+
+start_h_pt = box_height_pt(
+    text=start_text,
+    fontsize=MAIN_FONT_SIZE,
+    linespacing=LEFT_LINE_SPACING
+)
+
+for row in flow_rows_plot:
+
+    row["left_h_pt"] = box_height_pt(
+        text=row["left_text"],
+        fontsize=MAIN_FONT_SIZE,
+        linespacing=LEFT_LINE_SPACING
+    )
+
+    row["right_h_pt"] = box_height_pt(
+        text=row["right_text"],
+        fontsize=DETAIL_FONT_SIZE,
+        linespacing=RIGHT_LINE_SPACING
+    )
+
+    # Der Abstand zwischen zwei linken Boxen wird durch die Höhe der
+    # rechten Box bestimmt. Damit liegt die rechte Box vollständig und
+    # mittig im Zwischenraum und die horizontale Pfeillinie trifft
+    # exakt ihre vertikale Mitte.
+    row["gap_pt"] = max(
+        MIN_GAP_PT,
+        row["right_h_pt"]
+        + 2 * RIGHT_BOX_CLEARANCE_PT
+    )
+
+
+# ============================================================
+# Figure-Höhe aus Inhalt ableiten
+# ============================================================
+
+FIG_WIDTH = 13.0
+
+TOP_MARGIN_PT = 18
+BOTTOM_MARGIN_PT = 18
+
+content_height_pt = (
+    TOP_MARGIN_PT
+    + start_h_pt
+    + sum(row["gap_pt"] for row in flow_rows_plot)
+    + sum(row["left_h_pt"] for row in flow_rows_plot)
+    + BOTTOM_MARGIN_PT
+)
+
+# Punkte -> Inch; etwas Reserve verhindert, dass bbox_inches='tight'
+# die äusseren Konturen optisch zu knapp beschneidet.
+# ============================================================
+# Figure-Höhe aus Inhalt ableiten
+# ============================================================
+
+FIG_WIDTH = 13.0
+
+TOP_MARGIN_PT = 18
+BOTTOM_MARGIN_PT = 28
+
+content_height_pt = (
+    TOP_MARGIN_PT
+    + start_h_pt
+    + sum(row["gap_pt"] for row in flow_rows_plot)
+    + sum(row["left_h_pt"] for row in flow_rows_plot)
+    + BOTTOM_MARGIN_PT
+)
+
+
+# Tatsächlich nutzbarer vertikaler Anteil der Figure
+AXES_TOP = 0.985
+AXES_BOTTOM = 0.025
+AXES_HEIGHT_FRACTION = AXES_TOP - AXES_BOTTOM
+
+
+# Punkte -> Inch
+# Berücksichtigt, dass die Achse nicht 100 % der Figure-Höhe nutzt
+fig_height = max(
+    7.0,
+    (content_height_pt / 72) / AXES_HEIGHT_FRACTION
+)
+
+
+fig, ax = plt.subplots(
+    figsize=(
+        FIG_WIDTH,
+        fig_height
+    )
+)
+
+
+plt.subplots_adjust(
+    left=0.025,
+    right=0.985,
+    top=AXES_TOP,
+    bottom=AXES_BOTTOM
+)
+
+
+ax.set_xlim(0, 1)
+ax.set_ylim(0, 1)
+ax.axis("off")
+
+fig.canvas.draw()
+
+
+# ============================================================
+# Horizontales Layout
+# ============================================================
+
+left_x = 0.045
+left_w = 0.415
+
+right_x = 0.555
+right_w = 0.415
+
+center_x = left_x + left_w / 2
+
+
+# ============================================================
+# Punktgrössen in endgültige Achsenkoordinaten umrechnen
+# ============================================================
+
+top_margin = pt_to_axes_y(
+    ax,
+    TOP_MARGIN_PT
+)
+
+start_h = pt_to_axes_y(
+    ax,
+    start_h_pt
+)
+
+for row in flow_rows_plot:
+
+    row["left_h"] = pt_to_axes_y(
+        ax,
+        row["left_h_pt"]
+    )
+
+    row["right_h"] = pt_to_axes_y(
+        ax,
+        row["right_h_pt"]
+    )
+
+    row["vertical_gap"] = pt_to_axes_y(
+        ax,
+        row["gap_pt"]
+    )
+
+
+# ============================================================
+# Startbox
+# ============================================================
+
+start_y = 1 - top_margin - start_h
+
+
+draw_rect_box(
+    ax,
+    x=left_x,
+    y=start_y,
+    w=left_w,
+    h=start_h,
+    text=start_text,
+    fontsize=MAIN_FONT_SIZE,
+    lw=1.6,
+    facecolor=STEP_BOX_COLOR,
+    linespacing=LEFT_LINE_SPACING
+)
+
+previous_box_bottom = start_y
+
+
+# ============================================================
+# Ausschluss-Schritte zeichnen
+# ============================================================
+
+for i, row in enumerate(flow_rows_plot):
+
+    is_last_step = (
+        i == len(flow_rows_plot) - 1
+    )
+
+    left_h = row["left_h"]
+    right_h = row["right_h"]
+    vertical_gap = row["vertical_gap"]
+
+    # Oberkante der nächsten linken Box.
+    next_box_top = (
+        previous_box_bottom
+        - vertical_gap
+    )
+
+    # Unterkante / y-Position der nächsten linken Box.
+    left_y = (
+        next_box_top
+        - left_h
+    )
+
+    # Horizontale Abzweigung exakt im Zentrum des freien Bereichs.
+    branch_y = (
+        previous_box_bottom
+        + next_box_top
+    ) / 2
+
+    # Rechte Box exakt auf dieselbe y-Linie zentrieren.
+    right_y = (
+        branch_y
+        - right_h / 2
+    )
+
+    # 1) Vertikaler Hauptpfeil: Boxkante -> Boxkante.
+    draw_arrow(
+        ax,
+        center_x,
+        previous_box_bottom,
+        center_x,
+        next_box_top,
+        lw=LINE_LW,
+        mutation_scale=14
+    )
+
+    # 2) Horizontaler Ausschlusspfeil: Hauptlinie -> linke Kante
+    #    der rechten Box, exakt auf deren vertikaler Mitte.
+    draw_arrow(
+        ax,
+        center_x,
+        branch_y,
+        right_x,
+        branch_y,
+        lw=LINE_LW,
+        mutation_scale=13
+    )
+
+    # Rechte Ausschlussbox.
+    draw_exclusion_box(
+        ax,
+        x=right_x,
+        y=right_y,
+        w=right_w,
+        h=right_h,
+        text=row["right_text"],
+        lw=1.3,
+        fontsize=DETAIL_FONT_SIZE,
+        linespacing=RIGHT_LINE_SPACING
+    )
+
+    # Linke Kohortenbox.
+    draw_rect_box(
+        ax,
+        x=left_x,
+        y=left_y,
+        w=left_w,
+        h=left_h,
+        text=row["left_text"],
+        fontsize=MAIN_FONT_SIZE,
+        lw=(1.8 if is_last_step else 1.4),
+        facecolor=(
+            FINAL_BOX_COLOR
+            if is_last_step
+            else STEP_BOX_COLOR
+        ),
+        linespacing=LEFT_LINE_SPACING
+    )
+
+    previous_box_bottom = left_y
+
+
+# ============================================================
+# 12. Export
+# ============================================================
+
+# Keine weitere Layout-Änderung mehr nach der Box-/Pfeilberechnung.
+plt.savefig(
+    output_strobe_file,
+    dpi=300,
+    bbox_inches="tight",
+    pad_inches=0.18
+)
+
+plt.show()
+
+plt.close()
