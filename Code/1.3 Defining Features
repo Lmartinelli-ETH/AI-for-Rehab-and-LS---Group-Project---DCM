@@ -1,0 +1,1188 @@
+#####################################################################################################################################################
+################################################################# General Settings ##################################################################
+#####################################################################################################################################################
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+import matplotlib as plt
+import openpyxl
+import numpy as np
+import os
+import random
+import re
+from openpyxl.styles import PatternFill
+
+#####################################################################################################################################################
+###################################################################### SETTINGS #####################################################################
+#####################################################################################################################################################
+# Data
+PATH = './final_population.xlsx'
+PATH_OUT = './final_population_2.xlsx'
+
+# Define Features and Sheets
+# Available categories: 'axial', 'demographics', 'max_compression', 'anatomy', 'motion_at_max', 'raw', 'ratio_to_c2', 'gradient', 'clinics'
+
+FEATURES_SHEET = {
+    1: ['demographics', 'surgery', 'new_anatomy', 'motion_at_max', 'clinics'],
+    2: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'raw', 'clinics'],
+    3: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'ratio_to_c2', 'clinics'],
+    4: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'ratio_to_min', 'clinics'],
+    5: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'diff_to_min', 'clinics'],
+    6: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'gradient_down', 'clinics'],
+    7: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'gradient_up', 'clinics'],
+    8: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'contrast', 'clinics'],
+    9: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'abs_contrast', 'clinics'],
+    10: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'raw', 'ratio_to_c2', 'ratio_to_min', 'gradient_down', 'gradient_up', 'contrast', 'abs_contrast', 'clinics'],
+    11: ['demographics', 'axial', 'clinics'],
+    12: ['demographics', 'surgery', 'anatomy', 'max_compression', 'motion_at_max', 'raw', 'ratio_to_c2', 'ratio_to_min', 'gradient_down', 'gradient_up', 'contrast', 'abs_contrast', 'axial', 'clinics'],
+    # 13: ['demographics', 'surgery', 'anatomy', 'raw', 'clinics']
+}
+
+# SHEET NAMES
+SHEET_NAMES = {
+    1: 'important_columns',
+    2: 'raw',
+    3: 'ratio_to_c2',
+    4: 'ratio_to_min',
+    5: 'diff_to_min',
+    6: 'gradient_down',
+    7: 'gradient_up',
+    8: 'contrast',
+    9: 'abs_contrast',
+    10: 'simulation_features',
+    11: 'axial',
+    12: 'all',
+    # 13: 'basics',
+    # 3: 'database_BL',
+}
+
+
+#####################################################################################################################################################
+###################################################################### LOAD DATA ####################################################################
+#####################################################################################################################################################
+
+file = pd.read_excel(PATH, "database")
+jan = pd.read_excel(PATH, "Jan's Data")
+
+ws = load_workbook(PATH)
+
+# Extend Jan's Data so both Indexes match
+jan = jan.reindex(file.index)
+
+# Quick Overview
+print("Quick Overview of the dataset:")
+print(file.head(1))
+
+
+##############################################################################################################################################
+#################################################################### ALL FEATURES ###################################################################
+#####################################################################################################################################################
+# Filtered Databases
+baseline = []
+half = []
+one = []
+two = []
+three = []
+four = []
+five = []
+
+surgery_BL = []
+conservative_BL = []
+""" etc. """
+
+# Feature Classes
+demographics = []
+max_compression = []
+anatomy = []
+new_anatomy = []
+surgery = []
+motion_at_max = []
+raw = []
+axial = []
+ratio_to_c2 = []
+ratio_to_min = []
+diff_to_min = []
+gradient = []
+gradient_up = []
+contrast = []
+abs_contrast = []
+clinics = []
+
+ALL_FILTERS = {
+    '_BL': baseline,
+    '_6mth': half,
+    '_12mth': one,
+    '_24mth': two,
+    '_36mth': three,
+    '_48mth': four,
+    '_60mth': five,
+}
+
+# Maybe Add Filter for Conservative vs Surgical Treatment
+    # 'surgery_BL': surgery_BL,
+    # 'conservative_BL': conservative_BL,
+
+ALL_FEATURES = {
+    'demographics': demographics,
+    'anatomy': anatomy,
+    'max_compression': max_compression,
+    'new_anatomy': new_anatomy,
+    'surgery': surgery,
+    'motion_at_max': motion_at_max,
+    'raw': raw,
+    'axial': axial,
+    'ratio_to_c2': ratio_to_c2,
+    'ratio_to_min': ratio_to_min,
+    'diff_to_min': diff_to_min,
+    'gradient_down': gradient,
+    'gradient_up': gradient_up,
+    'contrast': contrast,
+    'abs_contrast': abs_contrast,
+    'clinics': clinics,
+}
+
+# All Feature Names
+ALL_FEATURE_NAMES = {
+    # Pure axial motion: raw and all derived measures (C2-C7).
+    'axial': [
+        # raw
+        'total_amp_ax_BL', 'total_disp_ax_BL', 'c2_amp_ax_BL', 'c3_amp_ax_BL',
+        'c4_amp_ax_BL', 'c5_amp_ax_BL', 'c6_amp_ax_BL', 'c7_amp_ax_BL',
+        'c2_disp_ax_BL', 'c3_disp_ax_BL', 'c4_disp_ax_BL', 'c5_disp_ax_BL',
+        'c6_disp_ax_BL', 'c7_disp_ax_BL',
+        # ratio_to_c2
+        'total_amp_ax_ratio_BL', 'total_disp_ax_ratio_BL', 'c2_amp_ax_ratio_BL', 'c3_amp_ax_ratio_BL',
+        'c4_amp_ax_ratio_BL', 'c5_amp_ax_ratio_BL', 'c6_amp_ax_ratio_BL', 'c7_amp_ax_ratio_BL',
+        'c2_disp_ax_ratio_BL', 'c3_disp_ax_ratio_BL', 'c4_disp_ax_ratio_BL', 'c5_disp_ax_ratio_BL',
+        'c6_disp_ax_ratio_BL', 'c7_disp_ax_ratio_BL',
+        # ratio_to_min
+        'total_amp_ax_ratio_min_BL', 'total_disp_ax_ratio_min_BL', 'c2_amp_ax_ratio_min_BL', 'c3_amp_ax_ratio_min_BL',
+        'c4_amp_ax_ratio_min_BL', 'c5_amp_ax_ratio_min_BL', 'c6_amp_ax_ratio_min_BL', 'c7_amp_ax_ratio_min_BL',
+        'c2_disp_ax_ratio_min_BL', 'c3_disp_ax_ratio_min_BL', 'c4_disp_ax_ratio_min_BL', 'c5_disp_ax_ratio_min_BL',
+        'c6_disp_ax_ratio_min_BL', 'c7_disp_ax_ratio_min_BL',
+        # diff_to_min
+        'total_amp_ax_diff_min_BL', 'total_disp_ax_diff_min_BL', 'c2_amp_ax_diff_min_BL', 'c3_amp_ax_diff_min_BL',
+        'c4_amp_ax_diff_min_BL', 'c5_amp_ax_diff_min_BL', 'c6_amp_ax_diff_min_BL', 'c7_amp_ax_diff_min_BL',
+        'c2_disp_ax_diff_min_BL', 'c3_disp_ax_diff_min_BL', 'c4_disp_ax_diff_min_BL', 'c5_disp_ax_diff_min_BL',
+        'c6_disp_ax_diff_min_BL', 'c7_disp_ax_diff_min_BL',
+        # gradient_down
+        'total_amp_ax_gradient_down_BL', 'total_disp_ax_gradient_down_BL', 'c2_amp_ax_gradient_down_BL', 'c3_amp_ax_gradient_down_BL',
+        'c4_amp_ax_gradient_down_BL', 'c5_amp_ax_gradient_down_BL', 'c6_amp_ax_gradient_down_BL', 'c2_disp_ax_gradient_down_BL',
+        'c3_disp_ax_gradient_down_BL', 'c4_disp_ax_gradient_down_BL', 'c5_disp_ax_gradient_down_BL', 'c6_disp_ax_gradient_down_BL',
+        # gradient_up
+        'total_amp_ax_gradient_up_BL', 'total_disp_ax_gradient_up_BL', 'c3_amp_ax_gradient_up_BL', 'c4_amp_ax_gradient_up_BL',
+        'c5_amp_ax_gradient_up_BL', 'c6_amp_ax_gradient_up_BL', 'c7_amp_ax_gradient_up_BL', 'c3_disp_ax_gradient_up_BL',
+        'c4_disp_ax_gradient_up_BL', 'c5_disp_ax_gradient_up_BL', 'c6_disp_ax_gradient_up_BL', 'c7_disp_ax_gradient_up_BL',
+        # contrast
+        'total_amp_ax_contrast_BL', 'total_disp_ax_contrast_BL', 'c2_amp_ax_contrast_BL', 'c3_amp_ax_contrast_BL',
+        'c4_amp_ax_contrast_BL', 'c5_amp_ax_contrast_BL', 'c6_amp_ax_contrast_BL', 'c7_amp_ax_contrast_BL',
+        'c2_disp_ax_contrast_BL', 'c3_disp_ax_contrast_BL', 'c4_disp_ax_contrast_BL', 'c5_disp_ax_contrast_BL',
+        'c6_disp_ax_contrast_BL', 'c7_disp_ax_contrast_BL',
+        # abs_contrast
+        'total_amp_ax_abs_contrast_BL', 'total_disp_ax_abs_contrast_BL', 'c2_amp_ax_abs_contrast_BL', 'c3_amp_ax_abs_contrast_BL',
+        'c4_amp_ax_abs_contrast_BL', 'c5_amp_ax_abs_contrast_BL', 'c6_amp_ax_abs_contrast_BL', 'c7_amp_ax_abs_contrast_BL',
+        'c2_disp_ax_abs_contrast_BL', 'c3_disp_ax_abs_contrast_BL', 'c4_disp_ax_abs_contrast_BL', 'c5_disp_ax_abs_contrast_BL',
+        'c6_disp_ax_abs_contrast_BL', 'c7_disp_ax_abs_contrast_BL',
+    ],
+
+    'demographics': ['record_id_BL', 'age_BL', 'sex_BL'],
+
+    'anatomy': ['substudy___1_BL', 'number_stenosis_BL', 'maximum_stenosis_BL',
+                'c2_csa_myelon_BL', 'c3_csa_myelon_BL', 'c4_csa_myelon_BL', 'c5_csa_myelon_BL', 'c6_csa_myelon_BL', 'c7_csa_myelon_BL',
+                'c2_stenosis_ap_BL', 'c3_stenosis_ap_BL', 'c4_stenosis_ap_BL', 'c5_stenosis_ap_BL', 'c6_stenosis_ap_BL', 'c7_stenosis_ap_BL',
+                'c2_stenosis_rl_BL', 'c3_stenosis_rl_BL', 'c4_stenosis_rl_BL', 'c5_stenosis_rl_BL', 'c6_stenosis_rl_BL', 'c7_stenosis_rl_BL',
+                'c2_stenosis_cr_BL', 'c3_stenosis_cr_BL', 'c4_stenosis_cr_BL', 'c5_stenosis_cr_BL', 'c6_stenosis_cr_BL', 'c7_stenosis_cr_BL',
+                'c2_aSCOR_BL', 'c3_aSCOR_BL', 'c4_aSCOR_BL', 'c5_aSCOR_BL', 'c6_aSCOR_BL', 'c7_aSCOR_BL'],
+    
+    'max_compression': ['csa_myelon_BL', 'stenosis_ap_BL', 'stenosis_rl_BL', 'stenosis_cr_BL', 'aSCOR_max_sten_BL'],
+
+    'new_anatomy': ['substudy___1_BL', 'number_stenosis_BL', 'maximum_stenosis_BL',
+                    'csa_myelon_BL', 'stenosis_ap_BL', 'stenosis_rl_BL', 'stenosis_cr_BL', 'aSCOR_max_sten_BL',
+                    'sten_adj_BL'],
+
+    'surgery': ['surg_timepoint___1_BL', 'surg_timepoint___2_6mth', 'surg_timepoint___3_12mth', 'surg_timepoint___4_24mth', 'surg_timepoint___5_36mth', 'surg_timepoint___6_48mth', 'surg_timepoint___7_60mth'],
+
+    'motion_at_max': ['amp_max_sten_ax_or_sag_BL', 'disp_max_sten_ax_or_sag_BL', 'amp_max_sten_ax_or_sag_adj_BL', 'disp_max_sten_ax_or_sag_adj_BL'],
+
+    'raw': ['total_amp_ax_BL', 'total_disp_ax_BL', 'total_amp_sag_BL', 'total_disp_sag_BL',
+            'c2_amp_ax_BL', 'c3_amp_ax_BL', 'c4_amp_ax_BL', 'c5_amp_ax_BL', 'c6_amp_ax_BL', 'c7_amp_ax_BL',
+            'c2_disp_ax_BL', 'c3_disp_ax_BL', 'c4_disp_ax_BL', 'c5_disp_ax_BL', 'c6_disp_ax_BL', 'c7_disp_ax_BL',
+            'c2_amplitude_hf_BL', 'c3_amplitude_hf_BL', 'c4_amplitude_hf_BL', 'c5_amplitude_hf_BL', 'c6_amplitude_hf_BL', 'c7_amplitude_hf_BL',
+            'c2_auc_corr_mm_hf_BL', 'c3_auc_corr_mm_hf_BL', 'c4_auc_corr_mm_hf_BL', 'c5_auc_corr_mm_hf_BL', 'c6_auc_corr_mm_hf_BL', 'c7_auc_corr_mm_hf_BL',
+            'C2_amp_ax_or_sag_BL', 'C3_amp_ax_or_sag_BL', 'C4_amp_ax_or_sag_BL', 'C5_amp_ax_or_sag_BL', 'C6_amp_ax_or_sag_BL', 'C7_amp_ax_or_sag_BL',
+            'C2_disp_ax_or_sag_BL', 'C3_disp_ax_or_sag_BL', 'C4_disp_ax_or_sag_BL', 'C5_disp_ax_or_sag_BL', 'C6_disp_ax_or_sag_BL', 'C7_disp_ax_or_sag_BL'],
+
+    'ratio_to_c2': ['total_amp_ax_ratio_BL', 'total_disp_ax_ratio_BL', 'total_amp_sag_ratio_BL', 'total_disp_sag_ratio_BL',
+                    'c2_amp_ax_ratio_BL', 'c3_amp_ax_ratio_BL', 'c4_amp_ax_ratio_BL', 'c5_amp_ax_ratio_BL', 'c6_amp_ax_ratio_BL', 'c7_amp_ax_ratio_BL',
+                    'c2_disp_ax_ratio_BL', 'c3_disp_ax_ratio_BL', 'c4_disp_ax_ratio_BL', 'c5_disp_ax_ratio_BL', 'c6_disp_ax_ratio_BL', 'c7_disp_ax_ratio_BL',
+                    'c2_amplitude_hf_ratio_BL', 'c3_amplitude_hf_ratio_BL', 'c4_amplitude_hf_ratio_BL', 'c5_amplitude_hf_ratio_BL', 'c6_amplitude_hf_ratio_BL', 'c7_amplitude_hf_ratio_BL',
+                    'c2_auc_corr_mm_hf_ratio_BL', 'c3_auc_corr_mm_hf_ratio_BL', 'c4_auc_corr_mm_hf_ratio_BL', 'c5_auc_corr_mm_hf_ratio_BL', 'c6_auc_corr_mm_hf_ratio_BL', 'c7_auc_corr_mm_hf_ratio_BL',
+                    'C2_amp_ax_or_sag_ratio_BL', 'C3_amp_ax_or_sag_ratio_BL', 'C4_amp_ax_or_sag_ratio_BL', 'C5_amp_ax_or_sag_ratio_BL', 'C6_amp_ax_or_sag_ratio_BL', 'C7_amp_ax_or_sag_ratio_BL',
+                    'C2_disp_ax_or_sag_ratio_BL', 'C3_disp_ax_or_sag_ratio_BL', 'C4_disp_ax_or_sag_ratio_BL', 'C5_disp_ax_or_sag_ratio_BL', 'C6_disp_ax_or_sag_ratio_BL', 'C7_disp_ax_or_sag_ratio_BL'],
+
+    'ratio_to_min': ['total_amp_ax_ratio_min_BL', 'total_disp_ax_ratio_min_BL', 'total_amp_sag_ratio_min_BL', 'total_disp_sag_ratio_min_BL',
+                     'c2_amp_ax_ratio_min_BL', 'c3_amp_ax_ratio_min_BL', 'c4_amp_ax_ratio_min_BL', 'c5_amp_ax_ratio_min_BL', 'c6_amp_ax_ratio_min_BL', 'c7_amp_ax_ratio_min_BL',
+                     'c2_disp_ax_ratio_min_BL', 'c3_disp_ax_ratio_min_BL', 'c4_disp_ax_ratio_min_BL', 'c5_disp_ax_ratio_min_BL', 'c6_disp_ax_ratio_min_BL', 'c7_disp_ax_ratio_min_BL',
+                     'c2_amplitude_hf_ratio_min_BL', 'c3_amplitude_hf_ratio_min_BL', 'c4_amplitude_hf_ratio_min_BL', 'c5_amplitude_hf_ratio_min_BL', 'c6_amplitude_hf_ratio_min_BL', 'c7_amplitude_hf_ratio_min_BL',
+                     'c2_auc_corr_mm_hf_ratio_min_BL', 'c3_auc_corr_mm_hf_ratio_min_BL', 'c4_auc_corr_mm_hf_ratio_min_BL', 'c5_auc_corr_mm_hf_ratio_min_BL', 'c6_auc_corr_mm_hf_ratio_min_BL', 'c7_auc_corr_mm_hf_ratio_min_BL',
+                     'C2_amp_ax_or_sag_ratio_min_BL', 'C3_amp_ax_or_sag_ratio_min_BL', 'C4_amp_ax_or_sag_ratio_min_BL', 'C5_amp_ax_or_sag_ratio_min_BL', 'C6_amp_ax_or_sag_ratio_min_BL', 'C7_amp_ax_or_sag_ratio_min_BL',
+                     'C2_disp_ax_or_sag_ratio_min_BL', 'C3_disp_ax_or_sag_ratio_min_BL', 'C4_disp_ax_or_sag_ratio_min_BL', 'C5_disp_ax_or_sag_ratio_min_BL', 'C6_disp_ax_or_sag_ratio_min_BL', 'C7_disp_ax_or_sag_ratio_min_BL'],
+
+    'diff_to_min': ['total_amp_ax_diff_min_BL', 'total_disp_ax_diff_min_BL', 'total_amp_sag_diff_min_BL', 'total_disp_sag_diff_min_BL',
+                     'c2_amp_ax_diff_min_BL', 'c3_amp_ax_diff_min_BL', 'c4_amp_ax_diff_min_BL', 'c5_amp_ax_diff_min_BL', 'c6_amp_ax_diff_min_BL', 'c7_amp_ax_diff_min_BL',
+                     'c2_disp_ax_diff_min_BL', 'c3_disp_ax_diff_min_BL', 'c4_disp_ax_diff_min_BL', 'c5_disp_ax_diff_min_BL', 'c6_disp_ax_diff_min_BL', 'c7_disp_ax_diff_min_BL',
+                     'c2_amplitude_hf_diff_min_BL', 'c3_amplitude_hf_diff_min_BL', 'c4_amplitude_hf_diff_min_BL', 'c5_amplitude_hf_diff_min_BL', 'c6_amplitude_hf_diff_min_BL', 'c7_amplitude_hf_diff_min_BL',
+                     'c2_auc_corr_mm_hf_diff_min_BL', 'c3_auc_corr_mm_hf_diff_min_BL', 'c4_auc_corr_mm_hf_diff_min_BL', 'c5_auc_corr_mm_hf_diff_min_BL', 'c6_auc_corr_mm_hf_diff_min_BL', 'c7_auc_corr_mm_hf_diff_min_BL',
+                     'C2_amp_ax_or_sag_diff_min_BL', 'C3_amp_ax_or_sag_diff_min_BL', 'C4_amp_ax_or_sag_diff_min_BL', 'C5_amp_ax_or_sag_diff_min_BL', 'C6_amp_ax_or_sag_diff_min_BL', 'C7_amp_ax_or_sag_diff_min_BL',
+                     'C2_disp_ax_or_sag_diff_min_BL', 'C3_disp_ax_or_sag_diff_min_BL', 'C4_disp_ax_or_sag_diff_min_BL', 'C5_disp_ax_or_sag_diff_min_BL', 'C6_disp_ax_or_sag_diff_min_BL', 'C7_disp_ax_or_sag_diff_min_BL'],
+
+    'gradient_down': ['total_amp_ax_gradient_down_BL', 'total_disp_ax_gradient_down_BL', 'total_amp_sag_gradient_down_BL', 'total_disp_sag_gradient_down_BL',
+                'c2_amp_ax_gradient_down_BL', 'c3_amp_ax_gradient_down_BL', 'c4_amp_ax_gradient_down_BL', 'c5_amp_ax_gradient_down_BL', 'c6_amp_ax_gradient_down_BL',
+                'c2_disp_ax_gradient_down_BL', 'c3_disp_ax_gradient_down_BL', 'c4_disp_ax_gradient_down_BL', 'c5_disp_ax_gradient_down_BL', 'c6_disp_ax_gradient_down_BL',
+                'c2_amplitude_hf_gradient_down_BL', 'c3_amplitude_hf_gradient_down_BL', 'c4_amplitude_hf_gradient_down_BL', 'c5_amplitude_hf_gradient_down_BL', 'c6_amplitude_hf_gradient_down_BL',
+                'c2_auc_corr_mm_hf_gradient_down_BL', 'c3_auc_corr_mm_hf_gradient_down_BL', 'c4_auc_corr_mm_hf_gradient_down_BL', 'c5_auc_corr_mm_hf_gradient_down_BL', 'c6_auc_corr_mm_hf_gradient_down_BL',
+                'C2_amp_ax_or_sag_gradient_down_BL', 'C3_amp_ax_or_sag_gradient_down_BL', 'C4_amp_ax_or_sag_gradient_down_BL', 'C5_amp_ax_or_sag_gradient_down_BL', 'C6_amp_ax_or_sag_gradient_down_BL',
+                'C2_disp_ax_or_sag_gradient_down_BL', 'C3_disp_ax_or_sag_gradient_down_BL', 'C4_disp_ax_or_sag_gradient_down_BL', 'C5_disp_ax_or_sag_gradient_down_BL', 'C6_disp_ax_or_sag_gradient_down_BL'
+            ],
+
+    'gradient_up': ['total_amp_ax_gradient_up_BL', 'total_disp_ax_gradient_up_BL', 'total_amp_sag_gradient_up_BL', 'total_disp_sag_gradient_up_BL',
+                   'c3_amp_ax_gradient_up_BL', 'c4_amp_ax_gradient_up_BL', 'c5_amp_ax_gradient_up_BL', 'c6_amp_ax_gradient_up_BL', 'c7_amp_ax_gradient_up_BL',
+                   'c3_disp_ax_gradient_up_BL', 'c4_disp_ax_gradient_up_BL', 'c5_disp_ax_gradient_up_BL', 'c6_disp_ax_gradient_up_BL', 'c7_disp_ax_gradient_up_BL',
+                   'c3_amplitude_hf_gradient_up_BL', 'c4_amplitude_hf_gradient_up_BL', 'c5_amplitude_hf_gradient_up_BL', 'c6_amplitude_hf_gradient_up_BL', 'c7_amplitude_hf_gradient_up_BL',
+                   'c3_auc_corr_mm_hf_gradient_up_BL', 'c4_auc_corr_mm_hf_gradient_up_BL', 'c5_auc_corr_mm_hf_gradient_up_BL', 'c6_auc_corr_mm_hf_gradient_up_BL', 'c7_auc_corr_mm_hf_gradient_up_BL',
+                   'C3_amp_ax_or_sag_gradient_up_BL', 'C4_amp_ax_or_sag_gradient_up_BL', 'C5_amp_ax_or_sag_gradient_up_BL', 'C6_amp_ax_or_sag_gradient_up_BL', 'C7_amp_ax_or_sag_gradient_up_BL',
+                   'C3_disp_ax_or_sag_gradient_up_BL', 'C4_disp_ax_or_sag_gradient_up_BL', 'C5_disp_ax_or_sag_gradient_up_BL', 'C6_disp_ax_or_sag_gradient_up_BL', 'C7_disp_ax_or_sag_gradient_up_BL'
+                ],
+
+    'contrast': ['total_amp_ax_contrast_BL', 'total_disp_ax_contrast_BL', 'total_amp_sag_contrast_BL', 'total_disp_sag_contrast_BL',
+                'c2_amp_ax_contrast_BL', 'c3_amp_ax_contrast_BL', 'c4_amp_ax_contrast_BL', 'c5_amp_ax_contrast_BL', 'c6_amp_ax_contrast_BL', 'c7_amp_ax_contrast_BL',
+                'c2_disp_ax_contrast_BL', 'c3_disp_ax_contrast_BL', 'c4_disp_ax_contrast_BL', 'c5_disp_ax_contrast_BL', 'c6_disp_ax_contrast_BL', 'c7_disp_ax_contrast_BL',
+                'c2_amplitude_hf_contrast_BL', 'c3_amplitude_hf_contrast_BL', 'c4_amplitude_hf_contrast_BL', 'c5_amplitude_hf_contrast_BL', 'c6_amplitude_hf_contrast_BL', 'c7_amplitude_hf_contrast_BL',
+                'c2_auc_corr_mm_hf_contrast_BL', 'c3_auc_corr_mm_hf_contrast_BL', 'c4_auc_corr_mm_hf_contrast_BL', 'c5_auc_corr_mm_hf_contrast_BL', 'c6_auc_corr_mm_hf_contrast_BL', 'c7_auc_corr_mm_hf_contrast_BL',
+                'C2_amp_ax_or_sag_contrast_BL', 'C3_amp_ax_or_sag_contrast_BL', 'C4_amp_ax_or_sag_contrast_BL', 'C5_amp_ax_or_sag_contrast_BL', 'C6_amp_ax_or_sag_contrast_BL', 'C7_amp_ax_or_sag_contrast_BL',
+                'C2_disp_ax_or_sag_contrast_BL', 'C3_disp_ax_or_sag_contrast_BL', 'C4_disp_ax_or_sag_contrast_BL', 'C5_disp_ax_or_sag_contrast_BL', 'C6_disp_ax_or_sag_contrast_BL', 'C7_disp_ax_or_sag_contrast_BL'],
+
+    'abs_contrast': ['total_amp_ax_abs_contrast_BL', 'total_disp_ax_abs_contrast_BL', 'total_amp_sag_abs_contrast_BL', 'total_disp_sag_abs_contrast_BL',
+                   'c2_amp_ax_abs_contrast_BL', 'c3_amp_ax_abs_contrast_BL', 'c4_amp_ax_abs_contrast_BL', 'c5_amp_ax_abs_contrast_BL', 'c6_amp_ax_abs_contrast_BL', 'c7_amp_ax_abs_contrast_BL',
+                   'c2_disp_ax_abs_contrast_BL', 'c3_disp_ax_abs_contrast_BL', 'c4_disp_ax_abs_contrast_BL', 'c5_disp_ax_abs_contrast_BL', 'c6_disp_ax_abs_contrast_BL', 'c7_disp_ax_abs_contrast_BL',
+                   'c2_amplitude_hf_abs_contrast_BL', 'c3_amplitude_hf_abs_contrast_BL', 'c4_amplitude_hf_abs_contrast_BL', 'c5_amplitude_hf_abs_contrast_BL', 'c6_amplitude_hf_abs_contrast_BL', 'c7_amplitude_hf_abs_contrast_BL',
+                   'c2_auc_corr_mm_hf_abs_contrast_BL', 'c3_auc_corr_mm_hf_abs_contrast_BL', 'c4_auc_corr_mm_hf_abs_contrast_BL', 'c5_auc_corr_mm_hf_abs_contrast_BL', 'c6_auc_corr_mm_hf_abs_contrast_BL', 'c7_auc_corr_mm_hf_abs_contrast_BL',
+                   'C2_amp_ax_or_sag_abs_contrast_BL', 'C3_amp_ax_or_sag_abs_contrast_BL', 'C4_amp_ax_or_sag_abs_contrast_BL', 'C5_amp_ax_or_sag_abs_contrast_BL', 'C6_amp_ax_or_sag_abs_contrast_BL', 'C7_amp_ax_or_sag_abs_contrast_BL',
+                   'C2_disp_ax_or_sag_abs_contrast_BL', 'C3_disp_ax_or_sag_abs_contrast_BL', 'C4_disp_ax_or_sag_abs_contrast_BL', 'C5_disp_ax_or_sag_abs_contrast_BL', 'C6_disp_ax_or_sag_abs_contrast_BL', 'C7_disp_ax_or_sag_abs_contrast_BL'],
+
+    'clinics': ['grassp_total_l_r_BL', 'total_dorsal_BL', 'total_sens_BL', 't4_latency_n2_cheps_BL', 'c8_latency_n2_cheps_BL', 'c6_latency_n2_cheps_BL',
+                'dash_score_BL', 'UEPP_C4_T1_BL', 'pinprick_total_BL', 'UELT_C4_T1_BL', 'lighttouch_total_BL', 'upper_extrem_motor_total_BL',
+                'sphincter_dysfunction_corr_BL', 'sensory_dysfunction_UE_BL', 'motor_dysfunction_LE_BL', 'motor_dysfunction_UE_BL', 'nurick_BL',
+                'total_mjoa_BL', 'mjoa_adj_BL', 'myelopathy_BL'],
+}
+
+# Define all Features
+def build_features():
+    with np.errstate(divide='ignore', invalid='ignore'):
+        for i in range(len(file)):
+    
+            ###########################################################################################################################
+            ######################################################## FILTERING ########################################################
+            ###########################################################################################################################
+            bl = file.loc[: , file.columns.str.endswith('_BL')]
+            half = file.loc[: , file.columns.str.endswith('_6mth')]
+            one = file.loc[: , file.columns.str.endswith('_12mth')]
+            two = file.loc[: , file.columns.str.endswith('_24mth')]
+            three = file.loc[: , file.columns.str.endswith('_36mth')]
+            four = file.loc[: , file.columns.str.endswith('_48mth')]
+            five = file.loc[: , file.columns.str.endswith('_60mth')]
+
+            ###########################################################################################################################
+            ####################################################### DEMOGRAPHICS ######################################################
+            ###########################################################################################################################
+            # Demographics
+            id = file.loc[i, 'record_id_BL']
+            age = file.loc[i, 'age_BL']
+            sex = file.loc[i, 'sex_BL']
+
+            demographics.append((id, age, sex))
+
+            ###########################################################################################################################
+            ######################################################### ANATOMY #########################################################
+            ###########################################################################################################################
+            # MRI done
+            sub = file.loc[i, 'substudy___1_BL']
+
+            # Anatomic Values
+            nr_sten = file.loc[i, 'number_stenosis_BL']
+            max_sten = file.loc[i, 'maximum_stenosis_BL']
+
+            c2_csa = file.loc[i, 'c2_csa_myelon_BL']
+            c3_csa = file.loc[i, 'c3_csa_myelon_BL']
+            c4_csa = file.loc[i, 'c4_csa_myelon_BL']
+            c5_csa = file.loc[i, 'c5_csa_myelon_BL']
+            c6_csa = file.loc[i, 'c6_csa_myelon_BL']
+            c7_csa = file.loc[i, 'c7_csa_myelon_BL']
+
+            c2_ap = file.loc[i, 'c2_myelon_ap_tra_BL']
+            c3_ap = file.loc[i, 'c3_myelon_ap_tra_BL']
+            c4_ap = file.loc[i, 'c4_myelon_ap_tra_BL']
+            c5_ap = file.loc[i, 'c5_myelon_ap_tra_BL']
+            c6_ap = file.loc[i, 'c6_myelon_ap_tra_BL']
+            c7_ap = file.loc[i, 'c7_myelon_ap_tra_BL']
+
+            c2_rl = file.loc[i, 'c2_myelon_rl_tra_BL']
+            c3_rl = file.loc[i, 'c3_myelon_rl_tra_BL']
+            c4_rl = file.loc[i, 'c4_myelon_rl_tra_BL']
+            c5_rl = file.loc[i, 'c5_myelon_rl_tra_BL']
+            c6_rl = file.loc[i, 'c6_myelon_rl_tra_BL']
+            c7_rl = file.loc[i, 'c7_myelon_rl_tra_BL']
+
+            c2_cr = file.loc[i, 'c2_myelon_cr_BL']
+            c3_cr = file.loc[i, 'c3_myelon_cr_BL']
+            c4_cr = file.loc[i, 'c4_myelon_cr_BL']
+            c5_cr = file.loc[i, 'c5_myelon_cr_BL']
+            c6_cr = file.loc[i, 'c6_myelon_cr_BL']
+            c7_cr = file.loc[i, 'c7_myelon_cr_BL']
+
+            c2_ascor = file.loc[i, 'aSCOR_C2_BL']
+            c3_ascor = file.loc[i, 'aSCOR_C3_BL']
+            c4_ascor = file.loc[i, 'aSCOR_C4_BL']
+            c5_ascor = file.loc[i, 'aSCOR_C5_BL']
+            c6_ascor = file.loc[i, 'aSCOR_C6_BL']
+            c7_ascor = file.loc[i, 'aSCOR_C7_BL']
+
+            anatomy.append((sub, nr_sten, max_sten, 
+                            c2_csa, c3_csa, c4_csa, c5_csa, c6_csa, c7_csa, 
+                            c2_ap, c3_ap, c4_ap, c5_ap, c6_ap, c7_ap,
+                            c2_rl, c3_rl, c4_rl, c5_rl, c6_rl, c7_rl,
+                            c2_cr, c3_cr, c4_cr, c5_cr, c6_cr, c7_cr,
+                            c2_ascor, c3_ascor, c4_ascor, c5_ascor, c6_ascor, c7_ascor,
+                            ))
+
+            # Max Compression
+            ascor = file.loc[i, 'aSCOR_max_sten_BL']
+
+            if file.loc[i, 'maximum_stenosis_BL']==1:
+                csa = c2_csa
+                ap = c2_ap
+                rl = c2_rl
+                cr = c2_cr
+
+            elif file.loc[i, 'maximum_stenosis_BL']==2:
+                csa = c3_csa
+                ap = c3_ap
+                rl = c3_rl
+                cr = c3_cr
+
+            elif file.loc[i, 'maximum_stenosis_BL']==3:
+                csa = c4_csa
+                ap = c4_ap
+                rl = c4_rl
+                cr = c4_cr
+
+            elif file.loc[i, 'maximum_stenosis_BL']==4:
+                csa = c5_csa
+                ap = c5_ap
+                rl = c5_rl
+                cr = c5_cr
+
+            elif file.loc[i, 'maximum_stenosis_BL']==5:
+                csa = c6_csa
+                ap = c6_ap
+                rl = c6_rl
+                cr = c6_cr
+
+            elif file.loc[i, 'maximum_stenosis_BL']==6:
+                csa = c7_csa
+                ap = c7_ap
+                rl = c7_rl
+                cr = c7_cr
+
+            max_compression.append((csa, ap, rl, cr, ascor))
+
+            ###########################################################################################################################
+            ################################################ NEW ANATOMY (Jan's Data) #################################################
+            ###########################################################################################################################
+            if file.loc[i, 'maximum_stenosis_BL']==1:
+                csa_new = jan.loc[i, 'C2/C3_area_BL']
+                ap_new = jan.loc[i, 'C2/C3_diameter_AP_BL']
+                rl_new = jan.loc[i, 'C2/C3_diameter_RL_BL']
+                cr_new = jan.loc[i, 'C2/C3_compression_ratio_BL']
+                sten_adj_BL = file.loc[i, 'stenosis_c2_3_BL']
+
+            elif file.loc[i, 'maximum_stenosis_BL']==2:
+                csa_new = jan.loc[i, 'C3/C4_area_BL']
+                ap_new = jan.loc[i, 'C3/C4_diameter_AP_BL']
+                rl_new = jan.loc[i, 'C3/C4_diameter_RL_BL']
+                cr_new = jan.loc[i, 'C3/C4_compression_ratio_BL']
+                sten_adj_BL = file.loc[i, 'stenosis_c3_4_BL']
+
+            elif file.loc[i, 'maximum_stenosis_BL']==3:
+                csa_new = jan.loc[i, 'C4/C5_area_BL']
+                ap_new = jan.loc[i, 'C4/C5_diameter_AP_BL']
+                rl_new = jan.loc[i, 'C4/C5_diameter_RL_BL']
+                cr_new = jan.loc[i, 'C4/C5_compression_ratio_BL']
+                sten_adj_BL = file.loc[i, 'stenosis_c4_5_BL']
+
+            elif file.loc[i, 'maximum_stenosis_BL']==4:
+                csa_new = jan.loc[i, 'C5/C6_area_BL']
+                ap_new = jan.loc[i, 'C5/C6_diameter_AP_BL']
+                rl_new = jan.loc[i, 'C5/C6_diameter_RL_BL']
+                cr_new = jan.loc[i, 'C5/C6_compression_ratio_BL']
+                sten_adj_BL = file.loc[i, 'stenosis_c5_6_BL']
+
+            elif file.loc[i, 'maximum_stenosis_BL']==5:
+                csa_new = jan.loc[i, 'C6/C7_area_BL']
+                ap_new = jan.loc[i, 'C6/C7_diameter_AP_BL']
+                rl_new = jan.loc[i, 'C6/C7_diameter_RL_BL']
+                cr_new = jan.loc[i, 'C6/C7_compression_ratio_BL']
+                sten_adj_BL = file.loc[i, 'stenosis_c6_7_BL']
+
+            new_anatomy.append((sub, nr_sten, max_sten, 
+                                csa, ap, rl, cr, ascor, 
+                                sten_adj_BL,
+                                ))
+
+            ###########################################################################################################################
+            ################################################### SURGICAL TIMEPOINTS ###################################################
+            ###########################################################################################################################
+
+            tp1 = file.loc[i, 'surg_timepoint___1_BL']
+            tp2 = file.loc[i, 'surg_timepoint___2_6mth']
+            tp3 = file.loc[i, 'surg_timepoint___3_12mth']
+            tp4 = file.loc[i, 'surg_timepoint___4_24mth']
+            tp5 = file.loc[i, 'surg_timepoint___5_36mth']
+            tp6 = file.loc[i, 'surg_timepoint___6_48mth']
+            tp7 = file.loc[i, 'surg_timepoint___7_60mth']
+        
+            surgery.append((tp1, tp2, tp3, tp4, tp5, tp6, tp7))
+
+            ###########################################################################################################################
+            ################################################ MOTION AT MAX COMPRESSION ################################################
+            ###########################################################################################################################
+            # Motion Values at max Stenosis
+            amp_ax_sag = file.loc[i, 'amp_max_sten_ax_or_sag_BL']
+            disp_ax_sag = file.loc[i, 'disp_max_sten_ax_or_sag_BL']
+
+            if amp_ax_sag < 0.771:
+                amp_ax_sag_adj = 'low'
+            elif pd.isna(amp_ax_sag):
+                amp_ax_sag_adj = None
+            else:
+                amp_ax_sag_adj = 'normal'
+
+            if disp_ax_sag < 0.86:
+                disp_ax_sag_adj = 'low'
+            elif pd.isna(disp_ax_sag):
+                disp_ax_sag_adj = None
+            else:
+                disp_ax_sag_adj = 'normal'
+
+            motion_at_max.append((amp_ax_sag, disp_ax_sag, amp_ax_sag_adj, disp_ax_sag_adj))
+
+            ###########################################################################################################################
+            ######################################################## RAW VALUES #######################################################
+            ###########################################################################################################################
+            # Motion Values ax or sag
+            c2_disp_ax_or_sag_raw = file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c3_disp_ax_or_sag_raw = file.loc[i, "C3_disp_ax_or_sag_BL"]
+            c4_disp_ax_or_sag_raw = file.loc[i, "C4_disp_ax_or_sag_BL"]
+            c5_disp_ax_or_sag_raw = file.loc[i, "C5_disp_ax_or_sag_BL"]
+            c6_disp_ax_or_sag_raw = file.loc[i, "C6_disp_ax_or_sag_BL"]
+            c7_disp_ax_or_sag_raw = file.loc[i, "C7_disp_ax_or_sag_BL"]
+
+            c2_amp_ax_or_sag_raw = file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c3_amp_ax_or_sag_raw = file.loc[i, "C3_amp_ax_or_sag_BL"]
+            c4_amp_ax_or_sag_raw = file.loc[i, "C4_amp_ax_or_sag_BL"]
+            c5_amp_ax_or_sag_raw = file.loc[i, "C5_amp_ax_or_sag_BL"]
+            c6_amp_ax_or_sag_raw = file.loc[i, "C6_amp_ax_or_sag_BL"]
+            c7_amp_ax_or_sag_raw = file.loc[i, "C7_amp_ax_or_sag_BL"]
+
+            # Motion Values sag
+            c2_amp_sag_raw = file.loc[i, 'c2_amplitude_hf_BL']
+            c3_amp_sag_raw = file.loc[i, 'c3_amplitude_hf_BL']
+            c4_amp_sag_raw = file.loc[i, 'c4_amplitude_hf_BL']
+            c5_amp_sag_raw = file.loc[i, 'c5_amplitude_hf_BL']
+            c6_amp_sag_raw = file.loc[i, 'c6_amplitude_hf_BL']
+            c7_amp_sag_raw = file.loc[i, 'c7_amplitude_hf_BL']
+            total_amp_sag_raw = c2_amp_sag_raw + c3_amp_sag_raw + c4_amp_sag_raw + c5_amp_sag_raw + c6_amp_sag_raw + c7_amp_sag_raw
+
+            c2_disp_sag_raw = file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c3_disp_sag_raw = file.loc[i, 'c3_auc_corr_mm_hf_BL']
+            c4_disp_sag_raw = file.loc[i, 'c4_auc_corr_mm_hf_BL']
+            c5_disp_sag_raw = file.loc[i, 'c5_auc_corr_mm_hf_BL']
+            c6_disp_sag_raw = file.loc[i, 'c6_auc_corr_mm_hf_BL']
+            c7_disp_sag_raw = file.loc[i, 'c7_auc_corr_mm_hf_BL']
+            total_disp_sag_raw = c2_disp_sag_raw + c3_disp_sag_raw + c4_disp_sag_raw + c5_disp_sag_raw + c6_disp_sag_raw + c7_disp_sag_raw
+
+            c2_disp_ax_raw = file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c3_disp_ax_raw = file.loc[i, 'c3_auc_corrallmean_mm_BL']
+            c4_disp_ax_raw = file.loc[i, 'c4_auc_corrallmean_mm_BL']
+            c5_disp_ax_raw = file.loc[i, 'c5_auc_corrallmean_mm_BL']
+            c6_disp_ax_raw = file.loc[i, 'c6_auc_corrallmean_mm_BL']
+            c7_disp_ax_raw = file.loc[i, 'c7_auc_corrallmean_mm_BL']
+            total_disp_ax_raw = c2_disp_ax_raw + c3_disp_ax_raw + c4_disp_ax_raw + c5_disp_ax_raw + c6_disp_ax_raw + c7_disp_ax_raw
+
+            c2_amp_ax_raw = file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c3_amp_ax_raw = file.loc[i, 'c3_4_max_amplitude_v2_BL']
+            c4_amp_ax_raw = file.loc[i, 'c4_5_max_amplitude_v2_BL']
+            c5_amp_ax_raw = file.loc[i, 'c5_6_max_amplitude_v2_BL']
+            c6_amp_ax_raw = file.loc[i, 'c6_7_max_amplitude_v2_BL']
+            c7_amp_ax_raw = file.loc[i, 'c7_1_max_amplitude_v2_BL']
+            total_amp_ax_raw = c2_amp_ax_raw + c3_amp_ax_raw + c4_amp_ax_raw + c5_amp_ax_raw + c6_amp_ax_raw + c7_amp_ax_raw
+
+            raw.append((total_amp_ax_raw, total_disp_ax_raw, total_amp_sag_raw, total_disp_sag_raw,
+                        c2_amp_ax_raw, c3_amp_ax_raw, c4_amp_ax_raw, c5_amp_ax_raw, c6_amp_ax_raw, c7_amp_ax_raw,
+                        c2_disp_ax_raw, c3_disp_ax_raw, c4_disp_ax_raw, c5_disp_ax_raw, c6_disp_ax_raw, c7_disp_ax_raw,
+                        c2_amp_sag_raw, c3_amp_sag_raw, c4_amp_sag_raw, c5_amp_sag_raw, c6_amp_sag_raw, c7_amp_sag_raw,
+                        c2_disp_sag_raw, c3_disp_sag_raw, c4_disp_sag_raw, c5_disp_sag_raw, c6_disp_sag_raw, c7_disp_sag_raw,
+                        c2_amp_ax_or_sag_raw, c3_amp_ax_or_sag_raw, c4_amp_ax_or_sag_raw, c5_amp_ax_or_sag_raw, c6_amp_ax_or_sag_raw, c7_amp_ax_or_sag_raw,
+                        c2_disp_ax_or_sag_raw, c3_disp_ax_or_sag_raw, c4_disp_ax_or_sag_raw, c5_disp_ax_or_sag_raw, c6_disp_ax_or_sag_raw, c7_disp_ax_or_sag_raw))
+
+            ###########################################################################################################################
+            ####################################################### RATIO TO C2 #######################################################
+            ###########################################################################################################################
+            # Motion Values ax or sag
+            c2_disp_ax_or_sag_ratio = file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c3_disp_ax_or_sag_ratio = file.loc[i, "C3_disp_ax_or_sag_BL"]/file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c4_disp_ax_or_sag_ratio = file.loc[i, "C4_disp_ax_or_sag_BL"]/file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c5_disp_ax_or_sag_ratio = file.loc[i, "C5_disp_ax_or_sag_BL"]/file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c6_disp_ax_or_sag_ratio = file.loc[i, "C6_disp_ax_or_sag_BL"]/file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c7_disp_ax_or_sag_ratio = file.loc[i, "C7_disp_ax_or_sag_BL"]/file.loc[i, "C2_disp_ax_or_sag_BL"]
+
+            c2_amp_ax_or_sag_ratio = file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c3_amp_ax_or_sag_ratio = file.loc[i, "C3_amp_ax_or_sag_BL"]/file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c4_amp_ax_or_sag_ratio = file.loc[i, "C4_amp_ax_or_sag_BL"]/file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c5_amp_ax_or_sag_ratio = file.loc[i, "C5_amp_ax_or_sag_BL"]/file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c6_amp_ax_or_sag_ratio = file.loc[i, "C6_amp_ax_or_sag_BL"]/file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c7_amp_ax_or_sag_ratio = file.loc[i, "C7_amp_ax_or_sag_BL"]/file.loc[i, "C2_amp_ax_or_sag_BL"]
+
+            # Motion Values sag
+            c2_amp_sag_ratio = file.loc[i, 'c2_amplitude_hf_BL']
+            c3_amp_sag_ratio = file.loc[i, 'c3_amplitude_hf_BL']/file.loc[i, 'c2_amplitude_hf_BL']
+            c4_amp_sag_ratio = file.loc[i, 'c4_amplitude_hf_BL']/file.loc[i, 'c2_amplitude_hf_BL']
+            c5_amp_sag_ratio = file.loc[i, 'c5_amplitude_hf_BL']/file.loc[i, 'c2_amplitude_hf_BL']
+            c6_amp_sag_ratio = file.loc[i, 'c6_amplitude_hf_BL']/file.loc[i, 'c2_amplitude_hf_BL']
+            c7_amp_sag_ratio = file.loc[i, 'c7_amplitude_hf_BL']/file.loc[i, 'c2_amplitude_hf_BL']
+            total_amp_sag_ratio = c2_amp_sag_ratio + c3_amp_sag_ratio + c4_amp_sag_ratio + c5_amp_sag_ratio + c6_amp_sag_ratio + c7_amp_sag_ratio
+
+            c2_disp_sag_ratio = file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c3_disp_sag_ratio = file.loc[i, 'c3_auc_corr_mm_hf_BL']/file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c4_disp_sag_ratio = file.loc[i, 'c4_auc_corr_mm_hf_BL']/file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c5_disp_sag_ratio = file.loc[i, 'c5_auc_corr_mm_hf_BL']/file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c6_disp_sag_ratio = file.loc[i, 'c6_auc_corr_mm_hf_BL']/file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c7_disp_sag_ratio = file.loc[i, 'c7_auc_corr_mm_hf_BL']/file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            total_disp_sag_ratio = c2_disp_sag_ratio + c3_disp_sag_ratio + c4_disp_sag_ratio + c5_disp_sag_ratio + c6_disp_sag_ratio + c7_disp_sag_ratio
+
+            c2_disp_ax_ratio = file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c3_disp_ax_ratio = file.loc[i, 'c3_auc_corrallmean_mm_BL']/file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c4_disp_ax_ratio = file.loc[i, 'c4_auc_corrallmean_mm_BL']/file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c5_disp_ax_ratio = file.loc[i, 'c5_auc_corrallmean_mm_BL']/file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c6_disp_ax_ratio = file.loc[i, 'c6_auc_corrallmean_mm_BL']/file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c7_disp_ax_ratio = file.loc[i, 'c7_auc_corrallmean_mm_BL']/file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            total_disp_ax_ratio = c2_disp_ax_ratio + c3_disp_ax_ratio + c4_disp_ax_ratio + c5_disp_ax_ratio + c6_disp_ax_ratio + c7_disp_ax_ratio
+
+            c2_amp_ax_ratio = file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c3_amp_ax_ratio = file.loc[i, 'c3_4_max_amplitude_v2_BL']/file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c4_amp_ax_ratio = file.loc[i, 'c4_5_max_amplitude_v2_BL']/file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c5_amp_ax_ratio = file.loc[i, 'c5_6_max_amplitude_v2_BL']/file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c6_amp_ax_ratio = file.loc[i, 'c6_7_max_amplitude_v2_BL']/file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c7_amp_ax_ratio = file.loc[i, 'c7_1_max_amplitude_v2_BL']/file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            total_amp_ax_ratio = c2_amp_ax_ratio + c3_amp_ax_ratio + c4_amp_ax_ratio + c5_amp_ax_ratio + c6_amp_ax_ratio + c7_amp_ax_ratio
+
+            ratio_to_c2.append((total_amp_ax_ratio, total_disp_ax_ratio, total_amp_sag_ratio, total_disp_sag_ratio,
+                                c2_amp_ax_ratio, c3_amp_ax_ratio, c4_amp_ax_ratio, c5_amp_ax_ratio, c6_amp_ax_ratio, c7_amp_ax_ratio,
+                                c2_disp_ax_ratio, c3_disp_ax_ratio, c4_disp_ax_ratio, c5_disp_ax_ratio, c6_disp_ax_ratio, c7_disp_ax_ratio,
+                                c2_amp_sag_ratio, c3_amp_sag_ratio, c4_amp_sag_ratio, c5_amp_sag_ratio, c6_amp_sag_ratio, c7_amp_sag_ratio,
+                                c2_disp_sag_ratio, c3_disp_sag_ratio, c4_disp_sag_ratio, c5_disp_sag_ratio, c6_disp_sag_ratio, c7_disp_sag_ratio,
+                                c2_amp_ax_or_sag_ratio, c3_amp_ax_or_sag_ratio, c4_amp_ax_or_sag_ratio, c5_amp_ax_or_sag_ratio, c6_amp_ax_or_sag_ratio, c7_amp_ax_or_sag_ratio,
+                                c2_disp_ax_or_sag_ratio, c3_disp_ax_or_sag_ratio, c4_disp_ax_or_sag_ratio, c5_disp_ax_or_sag_ratio, c6_disp_ax_or_sag_ratio, c7_disp_ax_or_sag_ratio))
+
+
+
+            ###########################################################################################################################
+            ####################################################### DIFF TO MIN ######################################################
+            ###########################################################################################################################
+
+            # Motion Values ax or sag
+            disp_ax_or_sag_min = min(file.loc[i, [f"C{j}_disp_ax_or_sag_BL" for j in range(2, 8)]])
+            amp_ax_or_sag_min = min(file.loc[i, [f"C{j}_amp_ax_or_sag_BL" for j in range(2, 8)]])
+
+            c2_disp_ax_or_sag_diff_min = file.loc[i, "C2_disp_ax_or_sag_BL"] - disp_ax_or_sag_min
+            c3_disp_ax_or_sag_diff_min = file.loc[i, "C3_disp_ax_or_sag_BL"] - disp_ax_or_sag_min
+            c4_disp_ax_or_sag_diff_min = file.loc[i, "C4_disp_ax_or_sag_BL"] - disp_ax_or_sag_min
+            c5_disp_ax_or_sag_diff_min = file.loc[i, "C5_disp_ax_or_sag_BL"] - disp_ax_or_sag_min
+            c6_disp_ax_or_sag_diff_min = file.loc[i, "C6_disp_ax_or_sag_BL"] - disp_ax_or_sag_min
+            c7_disp_ax_or_sag_diff_min = file.loc[i, "C7_disp_ax_or_sag_BL"] - disp_ax_or_sag_min
+
+            c2_amp_ax_or_sag_diff_min = file.loc[i, "C2_amp_ax_or_sag_BL"] - amp_ax_or_sag_min
+            c3_amp_ax_or_sag_diff_min = file.loc[i, "C3_amp_ax_or_sag_BL"] - amp_ax_or_sag_min
+            c4_amp_ax_or_sag_diff_min = file.loc[i, "C4_amp_ax_or_sag_BL"] - amp_ax_or_sag_min
+            c5_amp_ax_or_sag_diff_min = file.loc[i, "C5_amp_ax_or_sag_BL"] - amp_ax_or_sag_min
+            c6_amp_ax_or_sag_diff_min = file.loc[i, "C6_amp_ax_or_sag_BL"] - amp_ax_or_sag_min
+            c7_amp_ax_or_sag_diff_min = file.loc[i, "C7_amp_ax_or_sag_BL"] - amp_ax_or_sag_min
+
+            # Motion Values sag
+            amp_sag_min = min(file.loc[i, [f"c{j}_amplitude_hf_BL" for j in range(2, 8)]])
+            disp_sag_min = min(file.loc[i, [f"c{j}_auc_corr_mm_hf_BL" for j in range(2, 8)]])
+
+            c2_amp_sag_diff_min = file.loc[i, 'c2_amplitude_hf_BL'] - amp_sag_min
+            c3_amp_sag_diff_min = file.loc[i, 'c3_amplitude_hf_BL'] - amp_sag_min
+            c4_amp_sag_diff_min = file.loc[i, 'c4_amplitude_hf_BL'] - amp_sag_min
+            c5_amp_sag_diff_min = file.loc[i, 'c5_amplitude_hf_BL'] - amp_sag_min
+            c6_amp_sag_diff_min = file.loc[i, 'c6_amplitude_hf_BL'] - amp_sag_min
+            c7_amp_sag_diff_min = file.loc[i, 'c7_amplitude_hf_BL'] - amp_sag_min
+            total_amp_sag_diff_min = c2_amp_sag_diff_min + c3_amp_sag_diff_min + c4_amp_sag_diff_min + c5_amp_sag_diff_min + c6_amp_sag_diff_min + c7_amp_sag_diff_min
+
+            c2_disp_sag_diff_min = file.loc[i, 'c2_auc_corr_mm_hf_BL'] - disp_sag_min
+            c3_disp_sag_diff_min = file.loc[i, 'c3_auc_corr_mm_hf_BL'] - disp_sag_min
+            c4_disp_sag_diff_min = file.loc[i, 'c4_auc_corr_mm_hf_BL'] - disp_sag_min
+            c5_disp_sag_diff_min = file.loc[i, 'c5_auc_corr_mm_hf_BL'] - disp_sag_min
+            c6_disp_sag_diff_min = file.loc[i, 'c6_auc_corr_mm_hf_BL'] - disp_sag_min
+            c7_disp_sag_diff_min = file.loc[i, 'c7_auc_corr_mm_hf_BL'] - disp_sag_min
+            total_disp_sag_diff_min = c2_disp_sag_diff_min + c3_disp_sag_diff_min + c4_disp_sag_diff_min + c5_disp_sag_diff_min + c6_disp_sag_diff_min + c7_disp_sag_diff_min
+
+            # Motion Values ax
+            disp_ax_min = min(file.loc[i, [f"c{j}_auc_corrallmean_mm_BL" for j in range(2, 8)]])
+            amp_ax_min = min(file.loc[i, ['c2_3_max_amplitude_v2_BL', 'c3_4_max_amplitude_v2_BL', 'c4_5_max_amplitude_v2_BL',
+                                       'c5_6_max_amplitude_v2_BL', 'c6_7_max_amplitude_v2_BL', 'c7_1_max_amplitude_v2_BL']])
+
+            c2_disp_ax_diff_min = file.loc[i, 'c2_auc_corrallmean_mm_BL'] - disp_ax_min
+            c3_disp_ax_diff_min = file.loc[i, 'c3_auc_corrallmean_mm_BL'] - disp_ax_min
+            c4_disp_ax_diff_min = file.loc[i, 'c4_auc_corrallmean_mm_BL'] - disp_ax_min
+            c5_disp_ax_diff_min = file.loc[i, 'c5_auc_corrallmean_mm_BL'] - disp_ax_min
+            c6_disp_ax_diff_min = file.loc[i, 'c6_auc_corrallmean_mm_BL'] - disp_ax_min
+            c7_disp_ax_diff_min = file.loc[i, 'c7_auc_corrallmean_mm_BL'] - disp_ax_min
+            total_disp_ax_diff_min = c2_disp_ax_diff_min + c3_disp_ax_diff_min + c4_disp_ax_diff_min + c5_disp_ax_diff_min + c6_disp_ax_diff_min + c7_disp_ax_diff_min
+
+            c2_amp_ax_diff_min = file.loc[i, 'c2_3_max_amplitude_v2_BL'] - amp_ax_min
+            c3_amp_ax_diff_min = file.loc[i, 'c3_4_max_amplitude_v2_BL'] - amp_ax_min
+            c4_amp_ax_diff_min = file.loc[i, 'c4_5_max_amplitude_v2_BL'] - amp_ax_min
+            c5_amp_ax_diff_min = file.loc[i, 'c5_6_max_amplitude_v2_BL'] - amp_ax_min
+            c6_amp_ax_diff_min = file.loc[i, 'c6_7_max_amplitude_v2_BL'] - amp_ax_min
+            c7_amp_ax_diff_min = file.loc[i, 'c7_1_max_amplitude_v2_BL'] - amp_ax_min
+            total_amp_ax_diff_min = c2_amp_ax_diff_min + c3_amp_ax_diff_min + c4_amp_ax_diff_min + c5_amp_ax_diff_min + c6_amp_ax_diff_min + c7_amp_ax_diff_min
+
+            diff_to_min.append((total_amp_ax_diff_min, total_disp_ax_diff_min, total_amp_sag_diff_min, total_disp_sag_diff_min,
+                                 c2_amp_ax_diff_min, c3_amp_ax_diff_min, c4_amp_ax_diff_min, c5_amp_ax_diff_min, c6_amp_ax_diff_min, c7_amp_ax_diff_min,
+                                 c2_disp_ax_diff_min, c3_disp_ax_diff_min, c4_disp_ax_diff_min, c5_disp_ax_diff_min, c6_disp_ax_diff_min, c7_disp_ax_diff_min,
+                                 c2_amp_sag_diff_min, c3_amp_sag_diff_min, c4_amp_sag_diff_min, c5_amp_sag_diff_min, c6_amp_sag_diff_min, c7_amp_sag_diff_min,
+                                 c2_disp_sag_diff_min, c3_disp_sag_diff_min, c4_disp_sag_diff_min, c5_disp_sag_diff_min, c6_disp_sag_diff_min, c7_disp_sag_diff_min,
+                                 c2_amp_ax_or_sag_diff_min, c3_amp_ax_or_sag_diff_min, c4_amp_ax_or_sag_diff_min, c5_amp_ax_or_sag_diff_min, c6_amp_ax_or_sag_diff_min, c7_amp_ax_or_sag_diff_min,
+                                 c2_disp_ax_or_sag_diff_min, c3_disp_ax_or_sag_diff_min, c4_disp_ax_or_sag_diff_min, c5_disp_ax_or_sag_diff_min, c6_disp_ax_or_sag_diff_min, c7_disp_ax_or_sag_diff_min))
+
+            ###########################################################################################################################
+            ####################################################### RATIO TO MIN ######################################################
+            ###########################################################################################################################
+
+            # Motion Values ax or sag
+            disp_ax_or_sag_min = min(file.loc[i, [f"C{j}_disp_ax_or_sag_BL" for j in range(2, 8)]])
+            amp_ax_or_sag_min = min(file.loc[i, [f"C{j}_amp_ax_or_sag_BL" for j in range(2, 8)]])
+
+            c2_disp_ax_or_sag_ratio_min = file.loc[i, "C2_disp_ax_or_sag_BL"] / disp_ax_or_sag_min
+            c3_disp_ax_or_sag_ratio_min = file.loc[i, "C3_disp_ax_or_sag_BL"] / disp_ax_or_sag_min
+            c4_disp_ax_or_sag_ratio_min = file.loc[i, "C4_disp_ax_or_sag_BL"] / disp_ax_or_sag_min
+            c5_disp_ax_or_sag_ratio_min = file.loc[i, "C5_disp_ax_or_sag_BL"] / disp_ax_or_sag_min
+            c6_disp_ax_or_sag_ratio_min = file.loc[i, "C6_disp_ax_or_sag_BL"] / disp_ax_or_sag_min
+            c7_disp_ax_or_sag_ratio_min = file.loc[i, "C7_disp_ax_or_sag_BL"] / disp_ax_or_sag_min
+
+            c2_amp_ax_or_sag_ratio_min = file.loc[i, "C2_amp_ax_or_sag_BL"] / amp_ax_or_sag_min
+            c3_amp_ax_or_sag_ratio_min = file.loc[i, "C3_amp_ax_or_sag_BL"] / amp_ax_or_sag_min
+            c4_amp_ax_or_sag_ratio_min = file.loc[i, "C4_amp_ax_or_sag_BL"] / amp_ax_or_sag_min
+            c5_amp_ax_or_sag_ratio_min = file.loc[i, "C5_amp_ax_or_sag_BL"] / amp_ax_or_sag_min
+            c6_amp_ax_or_sag_ratio_min = file.loc[i, "C6_amp_ax_or_sag_BL"] / amp_ax_or_sag_min
+            c7_amp_ax_or_sag_ratio_min = file.loc[i, "C7_amp_ax_or_sag_BL"] / amp_ax_or_sag_min
+
+            # Motion Values sag
+            amp_sag_min = min(file.loc[i, [f"c{j}_amplitude_hf_BL" for j in range(2, 8)]])
+            disp_sag_min = min(file.loc[i, [f"c{j}_auc_corr_mm_hf_BL" for j in range(2, 8)]])
+
+            c2_amp_sag_ratio_min = file.loc[i, 'c2_amplitude_hf_BL'] / amp_sag_min
+            c3_amp_sag_ratio_min = file.loc[i, 'c3_amplitude_hf_BL'] / amp_sag_min
+            c4_amp_sag_ratio_min = file.loc[i, 'c4_amplitude_hf_BL'] / amp_sag_min
+            c5_amp_sag_ratio_min = file.loc[i, 'c5_amplitude_hf_BL'] / amp_sag_min
+            c6_amp_sag_ratio_min = file.loc[i, 'c6_amplitude_hf_BL'] / amp_sag_min
+            c7_amp_sag_ratio_min = file.loc[i, 'c7_amplitude_hf_BL'] / amp_sag_min
+            total_amp_sag_ratio_min = c2_amp_sag_ratio_min + c3_amp_sag_ratio_min + c4_amp_sag_ratio_min + c5_amp_sag_ratio_min + c6_amp_sag_ratio_min + c7_amp_sag_ratio_min
+
+            c2_disp_sag_ratio_min = file.loc[i, 'c2_auc_corr_mm_hf_BL'] / disp_sag_min
+            c3_disp_sag_ratio_min = file.loc[i, 'c3_auc_corr_mm_hf_BL'] / disp_sag_min
+            c4_disp_sag_ratio_min = file.loc[i, 'c4_auc_corr_mm_hf_BL'] / disp_sag_min
+            c5_disp_sag_ratio_min = file.loc[i, 'c5_auc_corr_mm_hf_BL'] / disp_sag_min
+            c6_disp_sag_ratio_min = file.loc[i, 'c6_auc_corr_mm_hf_BL'] / disp_sag_min
+            c7_disp_sag_ratio_min = file.loc[i, 'c7_auc_corr_mm_hf_BL'] / disp_sag_min
+            total_disp_sag_ratio_min = c2_disp_sag_ratio_min + c3_disp_sag_ratio_min + c4_disp_sag_ratio_min + c5_disp_sag_ratio_min + c6_disp_sag_ratio_min + c7_disp_sag_ratio_min
+
+            # Motion Values ax
+            disp_ax_min = min(file.loc[i, [f"c{j}_auc_corrallmean_mm_BL" for j in range(2, 8)]])
+            amp_ax_min = min(file.loc[i, ['c2_3_max_amplitude_v2_BL', 'c3_4_max_amplitude_v2_BL', 'c4_5_max_amplitude_v2_BL',
+                                       'c5_6_max_amplitude_v2_BL', 'c6_7_max_amplitude_v2_BL', 'c7_1_max_amplitude_v2_BL']])
+
+            c2_disp_ax_ratio_min = file.loc[i, 'c2_auc_corrallmean_mm_BL'] / disp_ax_min
+            c3_disp_ax_ratio_min = file.loc[i, 'c3_auc_corrallmean_mm_BL'] / disp_ax_min
+            c4_disp_ax_ratio_min = file.loc[i, 'c4_auc_corrallmean_mm_BL'] / disp_ax_min
+            c5_disp_ax_ratio_min = file.loc[i, 'c5_auc_corrallmean_mm_BL'] / disp_ax_min
+            c6_disp_ax_ratio_min = file.loc[i, 'c6_auc_corrallmean_mm_BL'] / disp_ax_min
+            c7_disp_ax_ratio_min = file.loc[i, 'c7_auc_corrallmean_mm_BL'] / disp_ax_min
+            total_disp_ax_ratio_min = c2_disp_ax_ratio_min + c3_disp_ax_ratio_min + c4_disp_ax_ratio_min + c5_disp_ax_ratio_min + c6_disp_ax_ratio_min + c7_disp_ax_ratio_min
+
+            c2_amp_ax_ratio_min = file.loc[i, 'c2_3_max_amplitude_v2_BL'] / amp_ax_min
+            c3_amp_ax_ratio_min = file.loc[i, 'c3_4_max_amplitude_v2_BL'] / amp_ax_min
+            c4_amp_ax_ratio_min = file.loc[i, 'c4_5_max_amplitude_v2_BL'] / amp_ax_min
+            c5_amp_ax_ratio_min = file.loc[i, 'c5_6_max_amplitude_v2_BL'] / amp_ax_min
+            c6_amp_ax_ratio_min = file.loc[i, 'c6_7_max_amplitude_v2_BL'] / amp_ax_min
+            c7_amp_ax_ratio_min = file.loc[i, 'c7_1_max_amplitude_v2_BL'] / amp_ax_min
+            total_amp_ax_ratio_min = c2_amp_ax_ratio_min + c3_amp_ax_ratio_min + c4_amp_ax_ratio_min + c5_amp_ax_ratio_min + c6_amp_ax_ratio_min + c7_amp_ax_ratio_min
+
+            ratio_to_min.append((total_amp_ax_ratio_min, total_disp_ax_ratio_min, total_amp_sag_ratio_min, total_disp_sag_ratio_min,
+                                 c2_amp_ax_ratio_min, c3_amp_ax_ratio_min, c4_amp_ax_ratio_min, c5_amp_ax_ratio_min, c6_amp_ax_ratio_min, c7_amp_ax_ratio_min,
+                                 c2_disp_ax_ratio_min, c3_disp_ax_ratio_min, c4_disp_ax_ratio_min, c5_disp_ax_ratio_min, c6_disp_ax_ratio_min, c7_disp_ax_ratio_min,
+                                 c2_amp_sag_ratio_min, c3_amp_sag_ratio_min, c4_amp_sag_ratio_min, c5_amp_sag_ratio_min, c6_amp_sag_ratio_min, c7_amp_sag_ratio_min,
+                                 c2_disp_sag_ratio_min, c3_disp_sag_ratio_min, c4_disp_sag_ratio_min, c5_disp_sag_ratio_min, c6_disp_sag_ratio_min, c7_disp_sag_ratio_min,
+                                 c2_amp_ax_or_sag_ratio_min, c3_amp_ax_or_sag_ratio_min, c4_amp_ax_or_sag_ratio_min, c5_amp_ax_or_sag_ratio_min, c6_amp_ax_or_sag_ratio_min, c7_amp_ax_or_sag_ratio_min,
+                                 c2_disp_ax_or_sag_ratio_min, c3_disp_ax_or_sag_ratio_min, c4_disp_ax_or_sag_ratio_min, c5_disp_ax_or_sag_ratio_min, c6_disp_ax_or_sag_ratio_min, c7_disp_ax_or_sag_ratio_min))
+
+
+            ###########################################################################################################################
+            ######################################################### STRETCH UP ######################################################
+            ###########################################################################################################################
+            # Motion Values ax or sag
+            # c2_disp_ax_or_sag_gradient = file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c3_disp_ax_or_sag_gradient_up = file.loc[i, "C3_disp_ax_or_sag_BL"]/file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c4_disp_ax_or_sag_gradient_up = file.loc[i, "C4_disp_ax_or_sag_BL"]/file.loc[i, "C3_disp_ax_or_sag_BL"]
+            c5_disp_ax_or_sag_gradient_up = file.loc[i, "C5_disp_ax_or_sag_BL"]/file.loc[i, "C4_disp_ax_or_sag_BL"]
+            c6_disp_ax_or_sag_gradient_up = file.loc[i, "C6_disp_ax_or_sag_BL"]/file.loc[i, "C5_disp_ax_or_sag_BL"]
+            c7_disp_ax_or_sag_gradient_up = file.loc[i, "C7_disp_ax_or_sag_BL"]/file.loc[i, "C6_disp_ax_or_sag_BL"]
+
+            # c2_amp_ax_or_sag_gradient_up = file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c3_amp_ax_or_sag_gradient_up = file.loc[i, "C3_amp_ax_or_sag_BL"]/file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c4_amp_ax_or_sag_gradient_up = file.loc[i, "C4_amp_ax_or_sag_BL"]/file.loc[i, "C3_amp_ax_or_sag_BL"]
+            c5_amp_ax_or_sag_gradient_up = file.loc[i, "C5_amp_ax_or_sag_BL"]/file.loc[i, "C4_amp_ax_or_sag_BL"]
+            c6_amp_ax_or_sag_gradient_up = file.loc[i, "C6_amp_ax_or_sag_BL"]/file.loc[i, "C5_amp_ax_or_sag_BL"]
+            c7_amp_ax_or_sag_gradient_up = file.loc[i, "C7_amp_ax_or_sag_BL"]/file.loc[i, "C6_amp_ax_or_sag_BL"]
+            
+            # Motion Values sag
+            # c2_amp_sag_gradient_up = file.loc[i, 'c2_amplitude_hf_BL']
+            c3_amp_sag_gradient_up = file.loc[i, 'c3_amplitude_hf_BL']/file.loc[i, 'c2_amplitude_hf_BL']
+            c4_amp_sag_gradient_up = file.loc[i, 'c4_amplitude_hf_BL']/file.loc[i, 'c3_amplitude_hf_BL']
+            c5_amp_sag_gradient_up = file.loc[i, 'c5_amplitude_hf_BL']/file.loc[i, 'c4_amplitude_hf_BL']
+            c6_amp_sag_gradient_up = file.loc[i, 'c6_amplitude_hf_BL']/file.loc[i, 'c5_amplitude_hf_BL']
+            c7_amp_sag_gradient_up = file.loc[i, 'c7_amplitude_hf_BL']/file.loc[i, 'c6_amplitude_hf_BL']
+            total_amp_sag_gradient_up = c3_amp_sag_gradient_up + c4_amp_sag_gradient_up + c5_amp_sag_gradient_up + c6_amp_sag_gradient_up + c7_amp_sag_gradient_up
+
+            # c2_disp_sag_gradient_up = file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c3_disp_sag_gradient_up = file.loc[i, 'c3_auc_corr_mm_hf_BL']/file.loc[i, 'c2_auc_corr_mm_hf_BL']
+            c4_disp_sag_gradient_up = file.loc[i, 'c4_auc_corr_mm_hf_BL']/file.loc[i, 'c3_auc_corr_mm_hf_BL']
+            c5_disp_sag_gradient_up = file.loc[i, 'c5_auc_corr_mm_hf_BL']/file.loc[i, 'c4_auc_corr_mm_hf_BL']
+            c6_disp_sag_gradient_up = file.loc[i, 'c6_auc_corr_mm_hf_BL']/file.loc[i, 'c5_auc_corr_mm_hf_BL']
+            c7_disp_sag_gradient_up = file.loc[i, 'c7_auc_corr_mm_hf_BL']/file.loc[i, 'c6_auc_corr_mm_hf_BL']
+            total_disp_sag_gradient_up = c3_disp_sag_gradient_up + c4_disp_sag_gradient_up + c5_disp_sag_gradient_up + c6_disp_sag_gradient_up + c7_disp_sag_gradient_up
+
+            # c2_disp_ax_gradient = file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c3_disp_ax_gradient_up = file.loc[i, 'c3_auc_corrallmean_mm_BL']/file.loc[i, 'c2_auc_corrallmean_mm_BL']
+            c4_disp_ax_gradient_up = file.loc[i, 'c4_auc_corrallmean_mm_BL']/file.loc[i, 'c3_auc_corrallmean_mm_BL']
+            c5_disp_ax_gradient_up = file.loc[i, 'c5_auc_corrallmean_mm_BL']/file.loc[i, 'c4_auc_corrallmean_mm_BL']
+            c6_disp_ax_gradient_up = file.loc[i, 'c6_auc_corrallmean_mm_BL']/file.loc[i, 'c5_auc_corrallmean_mm_BL']
+            c7_disp_ax_gradient_up = file.loc[i, 'c7_auc_corrallmean_mm_BL']/file.loc[i, 'c6_auc_corrallmean_mm_BL']
+            total_disp_ax_gradient_up = c3_disp_ax_gradient_up + c4_disp_ax_gradient_up + c5_disp_ax_gradient_up + c6_disp_ax_gradient_up + c7_disp_ax_gradient_up
+
+            # c2_amp_ax_gradient_up = file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c3_amp_ax_gradient_up = file.loc[i, 'c3_4_max_amplitude_v2_BL']/file.loc[i, 'c2_3_max_amplitude_v2_BL']
+            c4_amp_ax_gradient_up = file.loc[i, 'c4_5_max_amplitude_v2_BL']/file.loc[i, 'c3_4_max_amplitude_v2_BL']
+            c5_amp_ax_gradient_up = file.loc[i, 'c5_6_max_amplitude_v2_BL']/file.loc[i, 'c4_5_max_amplitude_v2_BL']
+            c6_amp_ax_gradient_up = file.loc[i, 'c6_7_max_amplitude_v2_BL']/file.loc[i, 'c5_6_max_amplitude_v2_BL']
+            c7_amp_ax_gradient_up = file.loc[i, 'c7_1_max_amplitude_v2_BL']/file.loc[i, 'c6_7_max_amplitude_v2_BL']
+            total_amp_ax_gradient_up = c3_amp_ax_gradient_up + c4_amp_ax_gradient_up + c5_amp_ax_gradient_up + c6_amp_ax_gradient_up + c7_amp_ax_gradient_up
+
+            gradient_up.append((total_amp_ax_gradient_up, total_disp_ax_gradient_up,
+                                total_amp_sag_gradient_up, total_disp_sag_gradient_up,
+                                c3_amp_ax_gradient_up, c4_amp_ax_gradient_up, c5_amp_ax_gradient_up, c6_amp_ax_gradient_up, c7_amp_ax_gradient_up,
+                                c3_disp_ax_gradient_up, c4_disp_ax_gradient_up, c5_disp_ax_gradient_up, c6_disp_ax_gradient_up, c7_disp_ax_gradient_up,
+                                c3_amp_sag_gradient_up, c4_amp_sag_gradient_up, c5_amp_sag_gradient_up, c6_amp_sag_gradient_up, c7_amp_sag_gradient_up,
+                                c3_disp_sag_gradient_up, c4_disp_sag_gradient_up, c5_disp_sag_gradient_up, c6_disp_sag_gradient_up, c7_disp_sag_gradient_up,
+                                c3_amp_ax_or_sag_gradient_up, c4_amp_ax_or_sag_gradient_up, c5_amp_ax_or_sag_gradient_up, c6_amp_ax_or_sag_gradient_up, c7_amp_ax_or_sag_gradient_up,
+                                c3_disp_ax_or_sag_gradient_up, c4_disp_ax_or_sag_gradient_up, c5_disp_ax_or_sag_gradient_up, c6_disp_ax_or_sag_gradient_up, c7_disp_ax_or_sag_gradient_up,
+                            ))
+
+            ###########################################################################################################################
+            ########################################################## STRETCH ########################################################
+            ###########################################################################################################################
+            # Motion Values ax or sag
+            c2_disp_ax_or_sag_gradient = file.loc[i, "C2_disp_ax_or_sag_BL"]
+            c3_disp_ax_or_sag_gradient = file.loc[i, "C3_disp_ax_or_sag_BL"]
+            c4_disp_ax_or_sag_gradient = file.loc[i, "C4_disp_ax_or_sag_BL"]
+            c5_disp_ax_or_sag_gradient = file.loc[i, "C5_disp_ax_or_sag_BL"]
+            c6_disp_ax_or_sag_gradient = file.loc[i, "C6_disp_ax_or_sag_BL"]
+
+            c2_amp_ax_or_sag_gradient = file.loc[i, "C2_amp_ax_or_sag_BL"]
+            c3_amp_ax_or_sag_gradient = file.loc[i, "C3_amp_ax_or_sag_BL"]
+            c4_amp_ax_or_sag_gradient = file.loc[i, "C4_amp_ax_or_sag_BL"]
+            c5_amp_ax_or_sag_gradient = file.loc[i, "C5_amp_ax_or_sag_BL"]
+            c6_amp_ax_or_sag_gradient = file.loc[i, "C6_amp_ax_or_sag_BL"]
+
+            # Motion Values sag
+            c2_amp_sag_gradient = file.loc[i, 'c2_amplitude_hf_BL']/file.loc[i, 'c3_amplitude_hf_BL']
+            c3_amp_sag_gradient = file.loc[i, 'c3_amplitude_hf_BL']/file.loc[i, 'c4_amplitude_hf_BL']
+            c4_amp_sag_gradient = file.loc[i, 'c4_amplitude_hf_BL']/file.loc[i, 'c5_amplitude_hf_BL']
+            c5_amp_sag_gradient = file.loc[i, 'c5_amplitude_hf_BL']/file.loc[i, 'c6_amplitude_hf_BL']
+            c6_amp_sag_gradient = file.loc[i, 'c6_amplitude_hf_BL']/file.loc[i, 'c7_amplitude_hf_BL']
+            total_amp_sag_gradient = c2_amp_sag_gradient + c3_amp_sag_gradient + c4_amp_sag_gradient + c5_amp_sag_gradient + c6_amp_sag_gradient
+
+            c2_disp_sag_gradient = file.loc[i, 'c2_auc_corr_mm_hf_BL']/file.loc[i, 'c3_auc_corr_mm_hf_BL']
+            c3_disp_sag_gradient = file.loc[i, 'c3_auc_corr_mm_hf_BL']/file.loc[i, 'c4_auc_corr_mm_hf_BL']
+            c4_disp_sag_gradient = file.loc[i, 'c4_auc_corr_mm_hf_BL']/file.loc[i, 'c5_auc_corr_mm_hf_BL']
+            c5_disp_sag_gradient = file.loc[i, 'c5_auc_corr_mm_hf_BL']/file.loc[i, 'c6_auc_corr_mm_hf_BL']
+            c6_disp_sag_gradient = file.loc[i, 'c6_auc_corr_mm_hf_BL']/file.loc[i, 'c7_auc_corr_mm_hf_BL']
+            total_disp_sag_gradient = c2_disp_sag_gradient + c3_disp_sag_gradient + c4_disp_sag_gradient + c5_disp_sag_gradient + c6_disp_sag_gradient
+
+            c2_disp_ax_gradient = file.loc[i, 'c2_auc_corrallmean_mm_BL']/file.loc[i, 'c3_auc_corrallmean_mm_BL']
+            c3_disp_ax_gradient = file.loc[i, 'c3_auc_corrallmean_mm_BL']/file.loc[i, 'c4_auc_corrallmean_mm_BL']
+            c4_disp_ax_gradient = file.loc[i, 'c4_auc_corrallmean_mm_BL']/file.loc[i, 'c5_auc_corrallmean_mm_BL']
+            c5_disp_ax_gradient = file.loc[i, 'c5_auc_corrallmean_mm_BL']/file.loc[i, 'c6_auc_corrallmean_mm_BL']
+            c6_disp_ax_gradient = file.loc[i, 'c6_auc_corrallmean_mm_BL']/file.loc[i, 'c7_auc_corrallmean_mm_BL']
+            total_disp_ax_gradient = c2_disp_ax_gradient + c3_disp_ax_gradient + c4_disp_ax_gradient + c5_disp_ax_gradient + c6_disp_ax_gradient
+
+            c2_amp_ax_gradient = file.loc[i, 'c2_3_max_amplitude_v2_BL']/file.loc[i, 'c3_4_max_amplitude_v2_BL']
+            c3_amp_ax_gradient = file.loc[i, 'c3_4_max_amplitude_v2_BL']/file.loc[i, 'c4_5_max_amplitude_v2_BL']
+            c4_amp_ax_gradient = file.loc[i, 'c4_5_max_amplitude_v2_BL']/file.loc[i, 'c5_6_max_amplitude_v2_BL']
+            c5_amp_ax_gradient = file.loc[i, 'c5_6_max_amplitude_v2_BL']/file.loc[i, 'c6_7_max_amplitude_v2_BL']
+            c6_amp_ax_gradient = file.loc[i, 'c6_7_max_amplitude_v2_BL']/file.loc[i, 'c7_1_max_amplitude_v2_BL']
+            total_amp_ax_gradient = c2_amp_ax_gradient + c3_amp_ax_gradient + c4_amp_ax_gradient + c5_amp_ax_gradient + c6_amp_ax_gradient
+
+            gradient.append((total_amp_ax_gradient, total_disp_ax_gradient, total_amp_sag_gradient, total_disp_sag_gradient,
+                            c2_amp_ax_gradient, c3_amp_ax_gradient, c4_amp_ax_gradient, c5_amp_ax_gradient, c6_amp_ax_gradient,
+                            c2_disp_ax_gradient, c3_disp_ax_gradient, c4_disp_ax_gradient, c5_disp_ax_gradient, c6_disp_ax_gradient,
+                            c2_amp_sag_gradient, c3_amp_sag_gradient, c4_amp_sag_gradient, c5_amp_sag_gradient, c6_amp_sag_gradient,
+                            c2_disp_sag_gradient, c3_disp_sag_gradient, c4_disp_sag_gradient, c5_disp_sag_gradient, c6_disp_sag_gradient,
+                            c2_amp_ax_or_sag_gradient, c3_amp_ax_or_sag_gradient, c4_amp_ax_or_sag_gradient, c5_amp_ax_or_sag_gradient, c6_amp_ax_or_sag_gradient,
+                            c2_disp_ax_or_sag_gradient, c3_disp_ax_or_sag_gradient, c4_disp_ax_or_sag_gradient, c5_disp_ax_or_sag_gradient, c6_disp_ax_or_sag_gradient))
+
+            ###########################################################################################################################
+            ###################################################### ABSOLUTE STRAIN ####################################################
+            ###########################################################################################################################
+            # Motion Values ax or sag
+            c2_disp_ax_or_sag_abs_contrast = file.loc[i, "C2_disp_ax_or_sag_BL"]/abs(file.loc[i, "C3_disp_ax_or_sag_BL"]-0)
+            c3_disp_ax_or_sag_abs_contrast = file.loc[i, "C3_disp_ax_or_sag_BL"]/abs(file.loc[i, "C4_disp_ax_or_sag_BL"]-file.loc[i, "C2_disp_ax_or_sag_BL"])
+            c4_disp_ax_or_sag_abs_contrast = file.loc[i, "C4_disp_ax_or_sag_BL"]/abs(file.loc[i, "C5_disp_ax_or_sag_BL"]-file.loc[i, "C3_disp_ax_or_sag_BL"])
+            c5_disp_ax_or_sag_abs_contrast = file.loc[i, "C5_disp_ax_or_sag_BL"]/abs(file.loc[i, "C6_disp_ax_or_sag_BL"]-file.loc[i, "C4_disp_ax_or_sag_BL"])
+            c6_disp_ax_or_sag_abs_contrast = file.loc[i, "C6_disp_ax_or_sag_BL"]/abs(file.loc[i, "C7_disp_ax_or_sag_BL"]-file.loc[i, "C5_disp_ax_or_sag_BL"])
+            c7_disp_ax_or_sag_abs_contrast = file.loc[i, "C7_disp_ax_or_sag_BL"]/abs(0-file.loc[i, "C6_disp_ax_or_sag_BL"])
+
+            c2_amp_ax_or_sag_abs_contrast = file.loc[i, "C2_amp_ax_or_sag_BL"]/abs(file.loc[i, "C3_amp_ax_or_sag_BL"]-0)
+            c3_amp_ax_or_sag_abs_contrast = file.loc[i, "C3_amp_ax_or_sag_BL"]/abs(file.loc[i, "C4_amp_ax_or_sag_BL"]-file.loc[i, "C2_amp_ax_or_sag_BL"])
+            c4_amp_ax_or_sag_abs_contrast = file.loc[i, "C4_amp_ax_or_sag_BL"]/abs(file.loc[i, "C5_amp_ax_or_sag_BL"]-file.loc[i, "C3_amp_ax_or_sag_BL"])
+            c5_amp_ax_or_sag_abs_contrast = file.loc[i, "C5_amp_ax_or_sag_BL"]/abs(file.loc[i, "C6_amp_ax_or_sag_BL"]-file.loc[i, "C4_amp_ax_or_sag_BL"])
+            c6_amp_ax_or_sag_abs_contrast = file.loc[i, "C6_amp_ax_or_sag_BL"]/abs(file.loc[i, "C7_amp_ax_or_sag_BL"]-file.loc[i, "C5_amp_ax_or_sag_BL"])
+            c7_amp_ax_or_sag_abs_contrast = file.loc[i, "C7_amp_ax_or_sag_BL"]/abs(0-file.loc[i, "C6_amp_ax_or_sag_BL"])
+
+            # Motion Values sag
+            c2_amp_sag_abs_contrast = file.loc[i, 'c2_amplitude_hf_BL']/abs(file.loc[i, 'c3_amplitude_hf_BL']-0)
+            c3_amp_sag_abs_contrast = file.loc[i, 'c3_amplitude_hf_BL']/abs(file.loc[i, 'c4_amplitude_hf_BL']-file.loc[i, 'c2_amplitude_hf_BL'])
+            c4_amp_sag_abs_contrast = file.loc[i, 'c4_amplitude_hf_BL']/abs(file.loc[i, 'c5_amplitude_hf_BL']-file.loc[i, 'c3_amplitude_hf_BL'])
+            c5_amp_sag_abs_contrast = file.loc[i, 'c5_amplitude_hf_BL']/abs(file.loc[i, 'c6_amplitude_hf_BL']-file.loc[i, 'c4_amplitude_hf_BL'])
+            c6_amp_sag_abs_contrast = file.loc[i, 'c6_amplitude_hf_BL']/abs(file.loc[i, 'c7_amplitude_hf_BL']-file.loc[i, 'c5_amplitude_hf_BL'])
+            c7_amp_sag_abs_contrast = file.loc[i, 'c7_amplitude_hf_BL']/abs(0-file.loc[i, 'c6_amplitude_hf_BL'])
+            total_amp_sag_abs_contrast = c2_amp_sag_abs_contrast + c3_amp_sag_abs_contrast + c4_amp_sag_abs_contrast + c5_amp_sag_abs_contrast + c6_amp_sag_abs_contrast + c7_amp_sag_abs_contrast
+
+            c2_disp_sag_abs_contrast = file.loc[i, 'c2_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c3_auc_corr_mm_hf_BL']-0)
+            c3_disp_sag_abs_contrast = file.loc[i, 'c3_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c4_auc_corr_mm_hf_BL']-file.loc[i, 'c2_auc_corr_mm_hf_BL'])
+            c4_disp_sag_abs_contrast = file.loc[i, 'c4_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c5_auc_corr_mm_hf_BL']-file.loc[i, 'c3_auc_corr_mm_hf_BL'])
+            c5_disp_sag_abs_contrast = file.loc[i, 'c5_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c6_auc_corr_mm_hf_BL']-file.loc[i, 'c4_auc_corr_mm_hf_BL'])
+            c6_disp_sag_abs_contrast = file.loc[i, 'c6_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c7_auc_corr_mm_hf_BL']-file.loc[i, 'c5_auc_corr_mm_hf_BL'])
+            c7_disp_sag_abs_contrast = file.loc[i, 'c7_auc_corr_mm_hf_BL']/abs(0-file.loc[i, 'c6_auc_corr_mm_hf_BL'])
+            total_disp_sag_abs_contrast = c2_disp_sag_abs_contrast + c3_disp_sag_abs_contrast + c4_disp_sag_abs_contrast + c5_disp_sag_abs_contrast + c6_disp_sag_abs_contrast + c7_disp_sag_abs_contrast
+
+            # Motion Values ax
+            c2_disp_ax_abs_contrast = file.loc[i, 'c2_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c3_auc_corrallmean_mm_BL']-0)
+            c3_disp_ax_abs_contrast = file.loc[i, 'c3_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c4_auc_corrallmean_mm_BL']-file.loc[i, 'c2_auc_corrallmean_mm_BL'])
+            c4_disp_ax_abs_contrast = file.loc[i, 'c4_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c5_auc_corrallmean_mm_BL']-file.loc[i, 'c3_auc_corrallmean_mm_BL'])
+            c5_disp_ax_abs_contrast = file.loc[i, 'c5_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c6_auc_corrallmean_mm_BL']-file.loc[i, 'c4_auc_corrallmean_mm_BL'])
+            c6_disp_ax_abs_contrast = file.loc[i, 'c6_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c7_auc_corrallmean_mm_BL']-file.loc[i, 'c5_auc_corrallmean_mm_BL'])
+            c7_disp_ax_abs_contrast = file.loc[i, 'c7_auc_corrallmean_mm_BL']/abs(0-file.loc[i, 'c6_auc_corrallmean_mm_BL'])
+            total_disp_ax_abs_contrast = c2_disp_ax_abs_contrast + c3_disp_ax_abs_contrast + c4_disp_ax_abs_contrast + c5_disp_ax_abs_contrast + c6_disp_ax_abs_contrast + c7_disp_ax_abs_contrast
+
+            c2_amp_ax_abs_contrast = file.loc[i, 'c2_3_max_amplitude_v2_BL']/abs(file.loc[i, 'c3_4_max_amplitude_v2_BL']-0)
+            c3_amp_ax_abs_contrast = file.loc[i, 'c3_4_max_amplitude_v2_BL']/abs(file.loc[i, 'c4_5_max_amplitude_v2_BL']-file.loc[i, 'c2_3_max_amplitude_v2_BL'])
+            c4_amp_ax_abs_contrast = file.loc[i, 'c4_5_max_amplitude_v2_BL']/abs(file.loc[i, 'c5_6_max_amplitude_v2_BL']-file.loc[i, 'c3_4_max_amplitude_v2_BL'])
+            c5_amp_ax_abs_contrast = file.loc[i, 'c5_6_max_amplitude_v2_BL']/abs(file.loc[i, 'c6_7_max_amplitude_v2_BL']-file.loc[i, 'c4_5_max_amplitude_v2_BL'])
+            c6_amp_ax_abs_contrast = file.loc[i, 'c6_7_max_amplitude_v2_BL']/abs(file.loc[i, 'c7_1_max_amplitude_v2_BL']-file.loc[i, 'c5_6_max_amplitude_v2_BL'])
+            c7_amp_ax_abs_contrast = file.loc[i, 'c7_1_max_amplitude_v2_BL']/abs(0-file.loc[i, 'c6_7_max_amplitude_v2_BL'])
+            total_amp_ax_abs_contrast = c2_amp_ax_abs_contrast + c3_amp_ax_abs_contrast + c4_amp_ax_abs_contrast + c5_amp_ax_abs_contrast + c6_amp_ax_abs_contrast + c7_amp_ax_abs_contrast
+
+            abs_contrast.append((total_amp_ax_abs_contrast, total_disp_ax_abs_contrast, total_amp_sag_abs_contrast, total_disp_sag_abs_contrast,
+                               c2_amp_ax_abs_contrast, c3_amp_ax_abs_contrast, c4_amp_ax_abs_contrast, c5_amp_ax_abs_contrast, c6_amp_ax_abs_contrast, c7_amp_ax_abs_contrast,
+                               c2_disp_ax_abs_contrast, c3_disp_ax_abs_contrast, c4_disp_ax_abs_contrast, c5_disp_ax_abs_contrast, c6_disp_ax_abs_contrast, c7_disp_ax_abs_contrast,
+                               c2_amp_sag_abs_contrast, c3_amp_sag_abs_contrast, c4_amp_sag_abs_contrast, c5_amp_sag_abs_contrast, c6_amp_sag_abs_contrast, c7_amp_sag_abs_contrast,
+                               c2_disp_sag_abs_contrast, c3_disp_sag_abs_contrast, c4_disp_sag_abs_contrast, c5_disp_sag_abs_contrast, c6_disp_sag_abs_contrast, c7_disp_sag_abs_contrast,
+                               c2_amp_ax_or_sag_abs_contrast, c3_amp_ax_or_sag_abs_contrast, c4_amp_ax_or_sag_abs_contrast, c5_amp_ax_or_sag_abs_contrast, c6_amp_ax_or_sag_abs_contrast, c7_amp_ax_or_sag_abs_contrast,
+                               c2_disp_ax_or_sag_abs_contrast, c3_disp_ax_or_sag_abs_contrast, c4_disp_ax_or_sag_abs_contrast, c5_disp_ax_or_sag_abs_contrast, c6_disp_ax_or_sag_abs_contrast, c7_disp_ax_or_sag_abs_contrast))
+
+            ###########################################################################################################################
+            ########################################################### STRAIN ########################################################
+            ###########################################################################################################################
+            # Motion Values ax or sag
+            c2_disp_ax_or_sag_contrast = file.loc[i, "C2_disp_ax_or_sag_BL"]/abs(file.loc[i, "C3_disp_ax_or_sag_BL"]-0)
+            c3_disp_ax_or_sag_contrast = file.loc[i, "C3_disp_ax_or_sag_BL"]/abs(file.loc[i, "C4_disp_ax_or_sag_BL"]-file.loc[i, "C2_disp_ax_or_sag_BL"])
+            c4_disp_ax_or_sag_contrast = file.loc[i, "C4_disp_ax_or_sag_BL"]/abs(file.loc[i, "C5_disp_ax_or_sag_BL"]-file.loc[i, "C3_disp_ax_or_sag_BL"])
+            c5_disp_ax_or_sag_contrast = file.loc[i, "C5_disp_ax_or_sag_BL"]/abs(file.loc[i, "C6_disp_ax_or_sag_BL"]-file.loc[i, "C4_disp_ax_or_sag_BL"])
+            c6_disp_ax_or_sag_contrast = file.loc[i, "C6_disp_ax_or_sag_BL"]/abs(file.loc[i, "C7_disp_ax_or_sag_BL"]-file.loc[i, "C5_disp_ax_or_sag_BL"])
+            c7_disp_ax_or_sag_contrast = file.loc[i, "C7_disp_ax_or_sag_BL"]/abs(0-file.loc[i, "C6_disp_ax_or_sag_BL"])
+
+            c2_amp_ax_or_sag_contrast = file.loc[i, "C2_amp_ax_or_sag_BL"]/abs(file.loc[i, "C3_amp_ax_or_sag_BL"]-0)
+            c3_amp_ax_or_sag_contrast = file.loc[i, "C3_amp_ax_or_sag_BL"]/abs(file.loc[i, "C4_amp_ax_or_sag_BL"]-file.loc[i, "C2_amp_ax_or_sag_BL"])
+            c4_amp_ax_or_sag_contrast = file.loc[i, "C4_amp_ax_or_sag_BL"]/abs(file.loc[i, "C5_amp_ax_or_sag_BL"]-file.loc[i, "C3_amp_ax_or_sag_BL"])
+            c5_amp_ax_or_sag_contrast = file.loc[i, "C5_amp_ax_or_sag_BL"]/abs(file.loc[i, "C6_amp_ax_or_sag_BL"]-file.loc[i, "C4_amp_ax_or_sag_BL"])
+            c6_amp_ax_or_sag_contrast = file.loc[i, "C6_amp_ax_or_sag_BL"]/abs(file.loc[i, "C7_amp_ax_or_sag_BL"]-file.loc[i, "C5_amp_ax_or_sag_BL"])
+            c7_amp_ax_or_sag_contrast = file.loc[i, "C7_amp_ax_or_sag_BL"]/abs(0-file.loc[i, "C6_amp_ax_or_sag_BL"])
+
+            # Motion Values sag
+            c2_amp_sag_contrast = file.loc[i, 'c2_amplitude_hf_BL']/abs(file.loc[i, 'c3_amplitude_hf_BL']-0)
+            c3_amp_sag_contrast = file.loc[i, 'c3_amplitude_hf_BL']/abs(file.loc[i, 'c4_amplitude_hf_BL']-file.loc[i, 'c2_amplitude_hf_BL'])
+            c4_amp_sag_contrast = file.loc[i, 'c4_amplitude_hf_BL']/abs(file.loc[i, 'c5_amplitude_hf_BL']-file.loc[i, 'c3_amplitude_hf_BL'])
+            c5_amp_sag_contrast = file.loc[i, 'c5_amplitude_hf_BL']/abs(file.loc[i, 'c6_amplitude_hf_BL']-file.loc[i, 'c4_amplitude_hf_BL'])
+            c6_amp_sag_contrast = file.loc[i, 'c6_amplitude_hf_BL']/abs(file.loc[i, 'c7_amplitude_hf_BL']-file.loc[i, 'c5_amplitude_hf_BL'])
+            c7_amp_sag_contrast = file.loc[i, 'c7_amplitude_hf_BL']/abs(0-file.loc[i, 'c6_amplitude_hf_BL'])
+            total_amp_sag_contrast = c2_amp_sag_contrast + c3_amp_sag_contrast + c4_amp_sag_contrast + c5_amp_sag_contrast + c6_amp_sag_contrast + c7_amp_sag_contrast
+
+            c2_disp_sag_contrast = file.loc[i, 'c2_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c3_auc_corr_mm_hf_BL']-0)
+            c3_disp_sag_contrast = file.loc[i, 'c3_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c4_auc_corr_mm_hf_BL']-file.loc[i, 'c2_auc_corr_mm_hf_BL'])
+            c4_disp_sag_contrast = file.loc[i, 'c4_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c5_auc_corr_mm_hf_BL']-file.loc[i, 'c3_auc_corr_mm_hf_BL'])
+            c5_disp_sag_contrast = file.loc[i, 'c5_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c6_auc_corr_mm_hf_BL']-file.loc[i, 'c4_auc_corr_mm_hf_BL'])
+            c6_disp_sag_contrast = file.loc[i, 'c6_auc_corr_mm_hf_BL']/abs(file.loc[i, 'c7_auc_corr_mm_hf_BL']-file.loc[i, 'c5_auc_corr_mm_hf_BL'])
+            c7_disp_sag_contrast = file.loc[i, 'c7_auc_corr_mm_hf_BL']/abs(0-file.loc[i, 'c6_auc_corr_mm_hf_BL'])
+            total_disp_sag_contrast = c2_disp_sag_contrast + c3_disp_sag_contrast + c4_disp_sag_contrast + c5_disp_sag_contrast + c6_disp_sag_contrast + c7_disp_sag_contrast
+
+            # Motion Values ax
+            c2_disp_ax_contrast = file.loc[i, 'c2_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c3_auc_corrallmean_mm_BL']-0)
+            c3_disp_ax_contrast = file.loc[i, 'c3_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c4_auc_corrallmean_mm_BL']-file.loc[i, 'c2_auc_corrallmean_mm_BL'])
+            c4_disp_ax_contrast = file.loc[i, 'c4_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c5_auc_corrallmean_mm_BL']-file.loc[i, 'c3_auc_corrallmean_mm_BL'])
+            c5_disp_ax_contrast = file.loc[i, 'c5_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c6_auc_corrallmean_mm_BL']-file.loc[i, 'c4_auc_corrallmean_mm_BL'])
+            c6_disp_ax_contrast = file.loc[i, 'c6_auc_corrallmean_mm_BL']/abs(file.loc[i, 'c7_auc_corrallmean_mm_BL']-file.loc[i, 'c5_auc_corrallmean_mm_BL'])
+            c7_disp_ax_contrast = file.loc[i, 'c7_auc_corrallmean_mm_BL']/abs(0-file.loc[i, 'c6_auc_corrallmean_mm_BL'])
+            total_disp_ax_contrast = c2_disp_ax_contrast + c3_disp_ax_contrast + c4_disp_ax_contrast + c5_disp_ax_contrast + c6_disp_ax_contrast + c7_disp_ax_contrast
+
+            c2_amp_ax_contrast = file.loc[i, 'c2_3_max_amplitude_v2_BL']/abs(file.loc[i, 'c3_4_max_amplitude_v2_BL']-0)
+            c3_amp_ax_contrast = file.loc[i, 'c3_4_max_amplitude_v2_BL']/abs(file.loc[i, 'c4_5_max_amplitude_v2_BL']-file.loc[i, 'c2_3_max_amplitude_v2_BL'])
+            c4_amp_ax_contrast = file.loc[i, 'c4_5_max_amplitude_v2_BL']/abs(file.loc[i, 'c5_6_max_amplitude_v2_BL']-file.loc[i, 'c3_4_max_amplitude_v2_BL'])
+            c5_amp_ax_contrast = file.loc[i, 'c5_6_max_amplitude_v2_BL']/abs(file.loc[i, 'c6_7_max_amplitude_v2_BL']-file.loc[i, 'c4_5_max_amplitude_v2_BL'])
+            c6_amp_ax_contrast = file.loc[i, 'c6_7_max_amplitude_v2_BL']/abs(file.loc[i, 'c7_1_max_amplitude_v2_BL']-file.loc[i, 'c5_6_max_amplitude_v2_BL'])
+            c7_amp_ax_contrast = file.loc[i, 'c7_1_max_amplitude_v2_BL']/abs(0-file.loc[i, 'c6_7_max_amplitude_v2_BL'])
+            total_amp_ax_contrast = c2_amp_ax_contrast + c3_amp_ax_contrast + c4_amp_ax_contrast + c5_amp_ax_contrast + c6_amp_ax_contrast + c7_amp_ax_contrast
+
+            contrast.append((total_amp_ax_contrast, total_disp_ax_contrast, total_amp_sag_contrast, total_disp_sag_contrast,
+                           c2_amp_ax_contrast, c3_amp_ax_contrast, c4_amp_ax_contrast, c5_amp_ax_contrast, c6_amp_ax_contrast, c7_amp_ax_contrast,
+                           c2_disp_ax_contrast, c3_disp_ax_contrast, c4_disp_ax_contrast, c5_disp_ax_contrast, c6_disp_ax_contrast, c7_disp_ax_contrast,
+                           c2_amp_sag_contrast, c3_amp_sag_contrast, c4_amp_sag_contrast, c5_amp_sag_contrast, c6_amp_sag_contrast, c7_amp_sag_contrast,
+                           c2_disp_sag_contrast, c3_disp_sag_contrast, c4_disp_sag_contrast, c5_disp_sag_contrast, c6_disp_sag_contrast, c7_disp_sag_contrast,
+                           c2_amp_ax_or_sag_contrast, c3_amp_ax_or_sag_contrast, c4_amp_ax_or_sag_contrast, c5_amp_ax_or_sag_contrast, c6_amp_ax_or_sag_contrast, c7_amp_ax_or_sag_contrast,
+                           c2_disp_ax_or_sag_contrast, c3_disp_ax_or_sag_contrast, c4_disp_ax_or_sag_contrast, c5_disp_ax_or_sag_contrast, c6_disp_ax_or_sag_contrast, c7_disp_ax_or_sag_contrast))
+
+            # AXIAL: collect all pure axial raw and derived values.
+            axial.append((
+                # raw
+                total_amp_ax_raw, total_disp_ax_raw, c2_amp_ax_raw, c3_amp_ax_raw,
+                c4_amp_ax_raw, c5_amp_ax_raw, c6_amp_ax_raw, c7_amp_ax_raw,
+                c2_disp_ax_raw, c3_disp_ax_raw, c4_disp_ax_raw, c5_disp_ax_raw,
+                c6_disp_ax_raw, c7_disp_ax_raw,
+                # ratio_to_c2
+                total_amp_ax_ratio, total_disp_ax_ratio, c2_amp_ax_ratio, c3_amp_ax_ratio,
+                c4_amp_ax_ratio, c5_amp_ax_ratio, c6_amp_ax_ratio, c7_amp_ax_ratio,
+                c2_disp_ax_ratio, c3_disp_ax_ratio, c4_disp_ax_ratio, c5_disp_ax_ratio,
+                c6_disp_ax_ratio, c7_disp_ax_ratio,
+                # ratio_to_min
+                total_amp_ax_ratio_min, total_disp_ax_ratio_min, c2_amp_ax_ratio_min, c3_amp_ax_ratio_min,
+                c4_amp_ax_ratio_min, c5_amp_ax_ratio_min, c6_amp_ax_ratio_min, c7_amp_ax_ratio_min,
+                c2_disp_ax_ratio_min, c3_disp_ax_ratio_min, c4_disp_ax_ratio_min, c5_disp_ax_ratio_min,
+                c6_disp_ax_ratio_min, c7_disp_ax_ratio_min,
+                # diff_to_min
+                total_amp_ax_diff_min, total_disp_ax_diff_min, c2_amp_ax_diff_min, c3_amp_ax_diff_min,
+                c4_amp_ax_diff_min, c5_amp_ax_diff_min, c6_amp_ax_diff_min, c7_amp_ax_diff_min,
+                c2_disp_ax_diff_min, c3_disp_ax_diff_min, c4_disp_ax_diff_min, c5_disp_ax_diff_min,
+                c6_disp_ax_diff_min, c7_disp_ax_diff_min,
+                # gradient_down
+                total_amp_ax_gradient, total_disp_ax_gradient, c2_amp_ax_gradient, c3_amp_ax_gradient,
+                c4_amp_ax_gradient, c5_amp_ax_gradient, c6_amp_ax_gradient, c2_disp_ax_gradient,
+                c3_disp_ax_gradient, c4_disp_ax_gradient, c5_disp_ax_gradient, c6_disp_ax_gradient,
+                # gradient_up
+                total_amp_ax_gradient_up, total_disp_ax_gradient_up, c3_amp_ax_gradient_up, c4_amp_ax_gradient_up,
+                c5_amp_ax_gradient_up, c6_amp_ax_gradient_up, c7_amp_ax_gradient_up, c3_disp_ax_gradient_up,
+                c4_disp_ax_gradient_up, c5_disp_ax_gradient_up, c6_disp_ax_gradient_up, c7_disp_ax_gradient_up,
+                # contrast
+                total_amp_ax_contrast, total_disp_ax_contrast, c2_amp_ax_contrast, c3_amp_ax_contrast,
+                c4_amp_ax_contrast, c5_amp_ax_contrast, c6_amp_ax_contrast, c7_amp_ax_contrast,
+                c2_disp_ax_contrast, c3_disp_ax_contrast, c4_disp_ax_contrast, c5_disp_ax_contrast,
+                c6_disp_ax_contrast, c7_disp_ax_contrast,
+                # abs_contrast
+                total_amp_ax_abs_contrast, total_disp_ax_abs_contrast, c2_amp_ax_abs_contrast, c3_amp_ax_abs_contrast,
+                c4_amp_ax_abs_contrast, c5_amp_ax_abs_contrast, c6_amp_ax_abs_contrast, c7_amp_ax_abs_contrast,
+                c2_disp_ax_abs_contrast, c3_disp_ax_abs_contrast, c4_disp_ax_abs_contrast, c5_disp_ax_abs_contrast,
+                c6_disp_ax_abs_contrast, c7_disp_ax_abs_contrast,
+            ))
+
+            ###########################################################################################################################
+            ######################################################### CLINICS #########################################################
+            ###########################################################################################################################
+            # Mjoa Scores
+            mjoa = file.loc[i, 'total_mjoa_BL']                             # total_mjoa_BL and adjusted Column called myelopathy_BL
+            if mjoa == 18:
+                myelopathy = "No"
+            elif mjoa >= 15:
+                myelopathy = "light"
+            elif mjoa >= 12 and mjoa < 15:
+                myelopathy = "middle"
+            elif mjoa < 12:
+                myelopathy = "severe"
+            elif pd.isna(mjoa):
+                myelopathy = None
+            else:
+                print("Error in database! Column total_mjoa_BL")
+
+            myelopathy_sig = file.loc[i, 'myelopathy_BL']
+            nurick = file.loc[i, 'nurick_BL']-1
+
+            # mjoa subscores
+            upper_motor_dys = file.loc[i, 'motor_dysfunction_UE_BL']
+            lower_motor_dys = file.loc[i, 'motor_dysfunction_LE_BL']
+            upper_sens_dys = file.loc[i, 'sensory_dysfunction_UE_BL']
+            sphincter = file.loc[i, 'sphincter_dysfunction_corr_BL']
+
+            # ASIA Scores
+            upper_motor_tot = file.loc[i, 'upper_extrem_motor_total_BL']
+            upper_touch = file.loc[i, 'lighttouch_total_BL']
+            upper_touch_sub = file.loc[i, 'UELT_C4_T1_BL']
+            pinprick = file.loc[i, 'pinprick_total_BL']
+            pp_sub = file.loc[i, 'UEPP_C4_T1_BL']
+
+            # DASH score
+            dash = file.loc[i, 'dash_score_BL']
+
+            # CHEPS
+            c6_cheps = file.loc[i, 'c6_latency_n2_cheps_BL']
+            c8_cheps = file.loc[i, 'c8_latency_n2_cheps_BL']
+            t4_cheps = file.loc[i, 't4_latency_n2_cheps_BL']
+
+            # Total Scores
+            tot_dorsal = file.loc[i, 'total_dorsal_BL']
+            tot_sens = file.loc[i, 'total_sens_BL']
+
+            # GRASSP score
+            grassp = file.loc[i, 'grassp_total_l_r_BL']
+
+            clinics.append((grassp, tot_dorsal, tot_sens, t4_cheps, c8_cheps, c6_cheps, dash, pp_sub, pinprick, upper_touch_sub,
+                            upper_touch, upper_motor_tot, sphincter, upper_sens_dys, lower_motor_dys, upper_motor_dys, nurick, mjoa,
+                            myelopathy, myelopathy_sig))
+
+
+################################################################################################################
+################################################ Define Results ################################################
+################################################################################################################
+def results(features):
+    if isinstance(features, str):
+        features = [features]
+    selected_results = []
+    for row in range(len(file)):
+        row_results = []
+        for feature in features:
+            row_results.extend(ALL_FEATURES[feature][row])
+        selected_results.append(tuple(row_results))
+    return selected_results
+
+# DataFrame
+def df_results(features):
+    if isinstance(features, str):
+        features = [features]
+    feature_names = []
+    for feature in features:
+        feature_names.extend(ALL_FEATURE_NAMES[feature])
+    df_result = pd.DataFrame(results(features), columns=feature_names)
+    df_result = df_result.loc[:, ~df_result.columns.duplicated()]
+    if 'record_id_BL' in df_result.columns:
+        df_result = df_result.set_index('record_id_BL')
+    print(df_result)
+    return df_result
+
+#####################################################################################################################################################
+################################################################# Create Database ###################################################################
+#####################################################################################################################################################
+def duplicate_database(data):
+    if os.path.exists(PATH_OUT):
+        wb = load_workbook(PATH_OUT)
+
+        if "database" in wb.sheetnames:
+            print("Sheet 'database' already exists. Creation is skipped.")
+            wb.close()
+            return
+
+        wb.close()
+
+        # File exists but Sheet 'database' is missing
+        with pd.ExcelWriter(PATH_OUT, engine="openpyxl", mode="a") as writer:
+            data.to_excel(writer, sheet_name="database", index=False)
+
+    else:
+        # File does not exist yet
+        data.to_excel(PATH_OUT, sheet_name="database", index=False)
+
+#####################################################################################################################################################
+################################################################### Create Sheet ####################################################################
+#####################################################################################################################################################
+def create_sheet(df_result, sheet_name):
+    mode = "a" if os.path.exists(PATH_OUT) else "w"
+    writer_settings = {
+        'path': PATH_OUT,
+        'engine': "openpyxl",
+        'mode': mode,
+    }
+    if mode == "a":
+        writer_settings['if_sheet_exists'] = "replace"
+
+    with pd.ExcelWriter(**writer_settings) as writer:
+        df_result.to_excel(writer, sheet_name=sheet_name)
+
+        #####################################################################################################################################################
+        ################################################################### Color Columns ###################################################################
+        #####################################################################################################################################################
+        # Define Colors
+        fill_not = PatternFill(fill_type='solid', start_color="FFFFFFFF", end_color="FFFFFFFF")     # white
+        fill_adj = PatternFill(fill_type="solid", start_color="FFF76F", end_color="FFF76F")         # light yellow
+        fill_hf = PatternFill(fill_type="solid", start_color="DAF2D0", end_color="DAF2D0")           # light green
+        fill_motion = PatternFill(fill_type="solid", start_color="c4eaeb", end_color="c4eaeb")      # light blue
+        fill_important = PatternFill(fill_type="solid", start_color="F7C7AC", end_color="F7C7AC")   # orange
+
+        # Direct access to the new sheet
+        sheet = writer.sheets[sheet_name]
+
+        # Run through Header-Rows
+        for col_idx, cell in enumerate(sheet[1], start=1):
+            col_name = cell.value
+
+            if col_name is not None and ("adj" in str(col_name)):
+                fill = fill_adj
+            elif col_name == 'maximum_stenosis_BL' or col_name == 'substudy___1_BL' or col_name == "number_stenosis_BL":   # baseline values --> used for futher investigation
+                fill = fill_important
+            elif col_name is not None and (("_amp_" in str(col_name)) or ("_disp_" in str(col_name))):
+                fill = fill_motion
+            elif col_name is not None and ("_hf_" in str(col_name)):
+                fill = fill_hf
+            else:
+                fill = fill_not
+
+            # Coloring whole columns
+            for row in range(1, sheet.max_row + 1):
+                sheet.cell(row=row, column=col_idx).fill = fill
+
+
+#####################################################################################################################################################
+####################################################################### MAIN ########################################################################
+#####################################################################################################################################################
+def main():
+    build_features()
+    duplicate_database(data=file)
+
+    for i, sheet in SHEET_NAMES.items():
+
+        print("###########################################")
+        print(i, ". Sheet: ", sheet)
+        print("###########################################")
+
+        df_result = df_results(FEATURES_SHEET[i])
+        create_sheet(df_result, SHEET_NAMES[i])
+
+if __name__ == "__main__":
+    main()
