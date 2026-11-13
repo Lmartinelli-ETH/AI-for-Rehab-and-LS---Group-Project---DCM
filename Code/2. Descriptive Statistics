@@ -1,0 +1,847 @@
+# =========================
+# IMPORTS
+# =========================
+
+import os
+import warnings
+
+import numpy as np
+import pandas as pd
+from scipy.stats import shapiro
+
+
+# =========================
+# EXCEL-DATEI DEFINIEREN
+# =========================
+
+file = "./final_population.xlsx"
+sheet = "important_columns"
+
+# output_directory = "./Final Documents - shared with MH/Research Intern/2. Results/2. Descriptive Statistics/2.1 Complete-Case Population"
+output_directory = "./2. Results/2. Descriptive Statistics"
+
+output_file = os.path.join(
+    output_directory,
+    "descriptive_statistics.xlsx"
+)
+
+
+# =========================
+# DATEN EINLESEN
+# =========================
+
+"""
+# Complete-Case Data
+df = pd.read_excel(
+    file,
+    sheet_name=sheet
+)
+"""
+# mJOA-filtered Data
+df = pd.read_excel(file, sheet_name=sheet)
+# df = d[d['total_mjoa_BL']<18]
+
+
+# ============================================================
+# KATEGORIALE VARIABLEN + LABELS
+# ============================================================
+#
+# Hier numerisch codierte kategoriale Variablen definieren.
+#
+# Beispiel:
+# sex_BL:
+#   1 = female
+#   2 = male
+#
+# myelopathy_signal:
+#   0 = no
+#   1 = yes
+#
+# Weitere Variablen können einfach ergänzt werden.
+# ============================================================
+
+category_mappings = {
+
+    "sex_BL": {
+        1: "female",
+        2: "male",
+    },
+
+    "myelopathy_signal": {
+        0: "no",
+        1: "yes",
+    },
+
+}
+
+
+# ============================================================
+# AUSWAHL FÜR DAS KOMPAKTE SUMMARY-SHEET
+# ============================================================
+#
+# Bei kategorialen Variablen soll im "summary"-Sheet normalerweise
+# nicht jede Kategorie erscheinen, sondern z. B. nur:
+#
+# sex_BL -> male
+# myelopathy_signal -> yes
+#
+# Die Angabe erfolgt über den ORIGINAL-CODE.
+# ============================================================
+
+summary_categories = {
+
+    "sex_BL": 2,               # male
+    "myelopathy_signal": 1,    # yes
+
+}
+
+
+# =========================
+# HILFSFUNKTIONEN
+# =========================
+
+def format_number(value, decimals=3):
+    """Zahl mit fixer Anzahl Dezimalstellen formatieren."""
+
+    if pd.isna(value):
+        return "NA"
+
+    return f"{value:.{decimals}f}"
+
+
+def format_percentage(value, decimals=1):
+    """
+    Prozentzahl für die Excel-Ausgabe formatieren.
+
+    Beispiel:
+    63.4 -> 63.4%
+    """
+
+    if pd.isna(value):
+        return ""
+
+    return f"{value:.{decimals}f}%"
+
+
+def get_category_label(column, category):
+    """
+    Gibt für numerisch codierte Kategorien das definierte Label zurück.
+
+    Beispiel:
+    sex_BL, 2 -> male
+
+    Falls kein Mapping existiert:
+    category wird unverändert als String ausgegeben.
+    """
+
+    mapping = category_mappings.get(column, {})
+
+    # Direkter Treffer
+    if category in mapping:
+        return mapping[category]
+
+    # Falls pandas z. B. 2.0 statt 2 liefert
+    try:
+        if float(category).is_integer():
+            integer_category = int(category)
+
+            if integer_category in mapping:
+                return mapping[integer_category]
+    except (ValueError, TypeError):
+        pass
+
+    return str(category)
+
+
+# =========================
+# DESKRIPTIVE STATISTIK
+# =========================
+
+def descriptive_statistics(
+    dataframe,
+    category_mappings=None,
+    alpha=0.05,
+    include_missing=True
+):
+    """
+    Erstellt eine vollständige Tabelle der deskriptiven Statistik.
+
+    NUMERISCHE VARIABLEN
+    --------------------
+    Normalverteilt:
+        Mittelwert ± SD
+
+    Nicht normalverteilt:
+        Median [Q1; Q3]
+
+
+    KATEGORIALE VARIABLEN
+    ---------------------
+    n und Prozent pro Kategorie.
+
+    Numerisch codierte kategoriale Variablen können über
+    category_mappings explizit definiert werden.
+
+    Beispiel:
+        category_mappings = {
+            "sex_BL": {
+                1: "female",
+                2: "male"
+            }
+        }
+    """
+
+    if category_mappings is None:
+        category_mappings = {}
+
+    # --------------------------------------------------------
+    # Prüfen, ob definierte Variablen tatsächlich vorhanden sind
+    # --------------------------------------------------------
+
+    unknown_columns = [
+        col
+        for col in category_mappings
+        if col not in dataframe.columns
+    ]
+
+    if unknown_columns:
+        warnings.warn(
+            "Folgende in category_mappings definierte Variablen "
+            "wurden im Datensatz nicht gefunden: "
+            + ", ".join(unknown_columns)
+        )
+
+    results = []
+
+    # ========================================================
+    # BINÄRE 0/1-VARIABLEN AUTOMATISCH ERKENNEN
+    # ========================================================
+
+    def is_binary_01_variable(series):
+
+        values = series.dropna()
+
+        if values.empty:
+            return False
+
+        if pd.api.types.is_bool_dtype(values):
+            return True
+
+        numeric_values = pd.to_numeric(
+            values,
+            errors="coerce"
+        )
+
+        if numeric_values.isna().any():
+            return False
+
+        unique_values = set(
+            numeric_values.unique()
+        )
+
+        return (
+            unique_values.issubset({0, 1})
+            and len(unique_values) <= 2
+        )
+
+    # ========================================================
+    # KATEGORIALE SPALTEN BESTIMMEN
+    # ========================================================
+
+    automatically_categorical = dataframe.select_dtypes(
+        include=[
+            "object",
+            "category",
+            "bool",
+            "string",
+        ]
+    ).columns.tolist()
+
+    binary_01_columns = [
+        col
+        for col in dataframe.columns
+        if is_binary_01_variable(dataframe[col])
+    ]
+
+    explicitly_categorical = [
+        col
+        for col in category_mappings
+        if col in dataframe.columns
+    ]
+
+    categorical_set = set(
+        automatically_categorical
+        + binary_01_columns
+        + explicitly_categorical
+    )
+
+    # ========================================================
+    # NUMERISCHE SPALTEN
+    # ========================================================
+
+    numeric_columns = [
+        col
+        for col in dataframe.select_dtypes(
+            include=[np.number]
+        ).columns
+        if col not in categorical_set
+    ]
+
+    # ========================================================
+    # NUMERISCHE VARIABLEN AUSWERTEN
+    # ========================================================
+
+    for col in numeric_columns:
+
+        x = pd.to_numeric(
+            dataframe[col],
+            errors="coerce"
+        ).dropna()
+
+        n_total = len(dataframe[col])
+        n_valid = len(x)
+        n_missing = n_total - n_valid
+
+        if n_valid == 0:
+            continue
+
+        # ----------------------------------------------------
+        # Shapiro-Wilk-Test
+        # ----------------------------------------------------
+
+        if 3 <= n_valid <= 5000:
+
+            try:
+                shapiro_p = shapiro(x).pvalue
+
+            except Exception:
+                shapiro_p = np.nan
+
+        else:
+            shapiro_p = np.nan
+
+        normal_distribution = (
+            not pd.isna(shapiro_p)
+            and shapiro_p >= alpha
+        )
+
+        # ----------------------------------------------------
+        # Kennzahlen
+        # ----------------------------------------------------
+
+        mean = x.mean()
+
+        sd = (
+            x.std(ddof=1)
+            if n_valid > 1
+            else np.nan
+        )
+
+        median = x.median()
+
+        q1 = x.quantile(0.25)
+        q3 = x.quantile(0.75)
+
+        iqr = q3 - q1
+
+        minimum = x.min()
+        maximum = x.max()
+
+        # ----------------------------------------------------
+        # Zusammenfassung
+        # ----------------------------------------------------
+
+        if normal_distribution:
+
+            summary = (
+                f"{mean:.1f} ± "
+                f"{sd:.1f}"
+            )
+
+        else:
+
+            summary = (
+                f"{median:.1f} "
+                f"[{q1:.1f}; {q3:.1f}]"
+            )
+
+        # ----------------------------------------------------
+        # Ergebnis speichern
+        # ----------------------------------------------------
+
+        results.append({
+
+            "variable": col,
+            "category": "",
+
+            "variable_type": "numeric",
+
+            "n": n_valid,
+
+            "percent": np.nan,
+
+            "summary": summary,
+
+            "mean": round(mean, 3),
+
+            "sd": (
+                round(sd, 3)
+                if not pd.isna(sd)
+                else np.nan
+            ),
+
+            "median": round(median, 3),
+
+            "q1": round(q1, 3),
+
+            "q3": round(q3, 3),
+
+            "iqr": round(iqr, 3),
+
+            "min": round(minimum, 3),
+
+            "max": round(maximum, 3),
+
+            "shapiro_p": (
+                round(shapiro_p, 4)
+                if not pd.isna(shapiro_p)
+                else np.nan
+            ),
+
+            "missing_n": n_missing,
+
+            "missing_percent": (
+                round(
+                    n_missing / n_total * 100,
+                    1
+                )
+                if n_total > 0
+                else np.nan
+            )
+
+        })
+
+    # ========================================================
+    # KATEGORIALE VARIABLEN
+    # ========================================================
+
+    categorical_columns_final = [
+        col
+        for col in dataframe.columns
+        if col in categorical_set
+    ]
+
+    for col in categorical_columns_final:
+
+        series = dataframe[col]
+
+        n_total = len(series)
+        n_valid = int(series.notna().sum())
+        n_missing = int(series.isna().sum())
+
+        # sort=False erhält soweit möglich die Reihenfolge
+        # der Werte im Datensatz.
+        counts = (
+            series
+            .dropna()
+            .value_counts(sort=False)
+        )
+
+        for category, count in counts.items():
+
+            percentage = (
+                count / n_valid * 100
+                if n_valid > 0
+                else np.nan
+            )
+
+            category_label = get_category_label(
+                col,
+                category
+            )
+
+            summary = (
+                f"{int(count)} "
+                f"({percentage:.1f}%)"
+            )
+
+            results.append({
+
+                "variable": col,
+
+                # Originalcode behalten
+                "category_code": category,
+
+                # verständliches Label
+                "category": category_label,
+
+                "variable_type": (
+                    "binary"
+                    if len(counts) <= 2
+                    else "categorical"
+                ),
+
+                "n": int(count),
+
+                "percent": round(
+                    percentage,
+                    1
+                ),
+
+                "summary": summary,
+
+                "mean": np.nan,
+                "sd": np.nan,
+                "median": np.nan,
+                "q1": np.nan,
+                "q3": np.nan,
+                "iqr": np.nan,
+                "min": np.nan,
+                "max": np.nan,
+                "shapiro_p": np.nan,
+
+                "missing_n": n_missing,
+
+                "missing_percent": (
+                    round(
+                        n_missing / n_total * 100,
+                        1
+                    )
+                    if n_total > 0
+                    else np.nan
+                )
+
+            })
+
+        # ----------------------------------------------------
+        # Fehlende Werte
+        # ----------------------------------------------------
+
+        if include_missing and n_missing > 0:
+
+            missing_percentage = (
+                n_missing / n_total * 100
+                if n_total > 0
+                else np.nan
+            )
+
+            results.append({
+
+                "variable": col,
+
+                "category_code": np.nan,
+
+                "category": "Missing",
+
+                "variable_type": "missing",
+
+                "n": n_missing,
+
+                "percent": round(
+                    missing_percentage,
+                    1
+                ),
+
+                "summary": (
+                    f"{n_missing} "
+                    f"({missing_percentage:.1f}%)"
+                ),
+
+                "mean": np.nan,
+                "sd": np.nan,
+                "median": np.nan,
+                "q1": np.nan,
+                "q3": np.nan,
+                "iqr": np.nan,
+                "min": np.nan,
+                "max": np.nan,
+                "shapiro_p": np.nan,
+
+                "missing_n": n_missing,
+
+                "missing_percent": round(
+                    missing_percentage,
+                    1
+                )
+
+            })
+
+    return pd.DataFrame(results)
+
+
+# =========================
+# ANALYSE DURCHFÜHREN
+# =========================
+
+table_total = descriptive_statistics(
+    dataframe=df,
+    category_mappings=category_mappings,
+    alpha=0.05,
+    include_missing=True
+)
+
+
+# ============================================================
+# KOMPAKTES SUMMARY-SHEET ERSTELLEN
+# ============================================================
+
+summary_rows = []
+
+for _, row in table_total.iterrows():
+
+    variable = row["variable"]
+    variable_type = row["variable_type"]
+
+    # --------------------------------------------------------
+    # Numerische Variable
+    # --------------------------------------------------------
+
+    if variable_type == "numeric":
+
+        summary_rows.append({
+
+            "variable": variable,
+
+            "n": int(row["n"]),
+
+            "percent": "",
+
+            "summary": row["summary"],
+
+        })
+
+    # --------------------------------------------------------
+    # Kategoriale Variable
+    # --------------------------------------------------------
+
+    elif variable in summary_categories:
+
+        wanted_category = summary_categories[
+            variable
+        ]
+
+        category_code = row.get(
+            "category_code",
+            np.nan
+        )
+
+        # Vergleich robust gegen int/float
+        try:
+
+            category_match = (
+                float(category_code)
+                == float(wanted_category)
+            )
+
+        except (ValueError, TypeError):
+
+            category_match = (
+                category_code
+                == wanted_category
+            )
+
+        if category_match:
+
+            category_label = get_category_label(
+                variable,
+                wanted_category
+            )
+
+            summary_rows.append({
+
+                "variable": (
+                    f"{variable} "
+                    f"({category_label})"
+                ),
+
+                # Bei Kategorien = Anzahl dieser Kategorie
+                "n": int(row["n"]),
+
+                # gewünschte Darstellung:
+                # 64 (63.4%)
+                "percent": (
+                    f"{int(row['n'])} "
+                    f"({row['percent']:.1f}%)"
+                ),
+
+                # leer, damit exakt die kompakte
+                # Struktur entsteht
+                "summary": "",
+
+            })
+
+
+table_summary = pd.DataFrame(summary_rows)
+
+
+# ============================================================
+# OPTIONAL:
+# Bei Kategorien den Text statt in "percent" in "summary" setzen
+# ============================================================
+#
+# Dein Screenshot zeigt:
+#
+# variable          n     percent        summary
+# sex_BL (male)     64    64 (63.4%)
+#
+# Deshalb wird oben der Wert in "percent" geschrieben.
+#
+# Falls du lieber möchtest:
+#
+# sex_BL (male)     64                   64 (63.4%)
+#
+# dann im obigen Block einfach:
+#
+# "percent": "",
+# "summary": f"{int(row['n'])} ({row['percent']:.1f}%)"
+#
+# verwenden.
+# ============================================================
+
+
+# =========================
+# TOTAL-SHEET VORBEREITEN
+# =========================
+
+# Sinnvolle Spaltenreihenfolge
+total_columns = [
+
+    "variable",
+    "category",
+    "variable_type",
+
+    "n",
+    "percent",
+    "summary",
+
+    "mean",
+    "sd",
+
+    "median",
+    "q1",
+    "q3",
+    "iqr",
+
+    "min",
+    "max",
+
+    "shapiro_p",
+
+    "missing_n",
+    "missing_percent",
+
+]
+
+table_total_export = table_total[
+    [
+        col
+        for col in total_columns
+        if col in table_total.columns
+    ]
+].copy()
+
+
+# =========================
+# AUSGABE IN KONSOLE
+# =========================
+
+print("\nTOTAL\n")
+print(
+    table_total_export.to_string(
+        index=False
+    )
+)
+
+print("\nSUMMARY\n")
+print(
+    table_summary.to_string(
+        index=False
+    )
+)
+
+
+# =========================
+# EXPORT ALS EXCEL
+# =========================
+
+os.makedirs(
+    output_directory,
+    exist_ok=True
+)
+
+with pd.ExcelWriter(
+    output_file,
+    engine="openpyxl"
+) as writer:
+
+    # --------------------------------------------------------
+    # Sheet 1: vollständige Statistik
+    # --------------------------------------------------------
+
+    table_total_export.to_excel(
+        writer,
+        sheet_name="total",
+        index=False
+    )
+
+    # --------------------------------------------------------
+    # Sheet 2: kompakte Statistik
+    # --------------------------------------------------------
+
+    table_summary.to_excel(
+        writer,
+        sheet_name="summary",
+        index=False
+    )
+
+    # --------------------------------------------------------
+    # Einfache Formatierung
+    # --------------------------------------------------------
+
+    workbook = writer.book
+
+    for sheet_name in [
+        "total",
+        "summary"
+    ]:
+
+        worksheet = workbook[sheet_name]
+
+        worksheet.freeze_panes = "A2"
+
+        # automatische Spaltenbreite
+        for column_cells in worksheet.columns:
+
+            max_length = 0
+
+            column_letter = (
+                column_cells[0]
+                .column_letter
+            )
+
+            for cell in column_cells:
+
+                try:
+
+                    if cell.value is not None:
+
+                        max_length = max(
+                            max_length,
+                            len(str(cell.value))
+                        )
+
+                except Exception:
+                    pass
+
+            worksheet.column_dimensions[
+                column_letter
+            ].width = min(
+                max_length + 2,
+                45
+            )
+
+
+print(
+    "\nDatei gespeichert unter:\n"
+    f"{output_file}"
+)
