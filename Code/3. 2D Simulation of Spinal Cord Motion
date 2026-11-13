@@ -1,0 +1,3047 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+import json
+import re
+
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+import numpy as np
+import pandas as pd
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch, PathPatch, Polygon
+from matplotlib.path import Path as MplPath
+from scipy.interpolate import PchipInterpolator
+
+
+# =============================================================================
+# 0. PERSONAL SETTINGS
+# =============================================================================
+
+SIMULATION_CMAP_NAME = "motion_cutoff"
+
+# LEVELS = ["C2", "C3", "C4", "C5", "C6", "C7"]
+LEVELS = ["c2", "c3", "c4", "c5", "c6", "c7"]
+
+MOTION = 'down_corr_hf_BL'
+
+SCALE_EQUAL = 'False' 
+SCALE_ALL_EQUAL = 'False'
+
+# --- SIMULATION MODE ----------------------------------------------------------
+# Exactly ONE mode runs.
+# Use names instead of numbers so the active mode is unambiguous.
+
+SIMULATION_MODE = "comparison"
+# Options: "raw", "ratio_to_c2", "ratio_to_min", "diff_to_min",
+# "gradient_down", "gradient_up", "contrast", "abs_contrast",
+# "signed_strain", "abs_strain", "interseg_diff",
+# "curvature", "concentration", "comparison"
+
+# Select a subset, or use "all" to compare all transformations.
+# COMPARISON = ["raw", "ratio_to_min", "diff_to_min", ]
+# COMPARISON = ["gradient_down", "gradient_up", "concentration"]
+# COMPARISON = ["contrast", "abs_contrast", "interseg_diff",]
+# COMPARISON = ["signed_strain", "abs_strain", "curvature",]
+
+COMPARISON = ["raw", "ratio_to_c2", "gradient_up",]
+# COMPARISON = ['diff_to_min', 'signed_strain', 'abs_strain',  'interseg_diff', 'curvatures']
+
+# COMPARISON = "all"
+
+COMPARISON_TITLE = "Population averages | Simulation modes"
+
+COMPARISON_MAX_COLUMNS = 3
+COMPARISON_PANEL_WIDTH = 5.4
+COMPARISON_PANEL_HEIGHT = 4.0
+
+# --- General settings (always used) ------------------------------------------
+FILE_PATH = Path("./final_population.xlsx")
+SHEET_NAME = "database"
+OUTPUT_DIRECTORY = Path("./TESTS/3.1 Simulation - extended")
+OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+PATIENT_ID_COLUMN = "record_id_BL"
+PATIENT_INDEX = 0
+MULTI_PATIENT_START = 0
+MULTI_PATIENT_COUNT = 75
+MULTI_PATIENT_COLUMNS = 15
+SAVE_ALL_INDIVIDUAL_PATIENTS = False
+INDIVIDUAL_PATIENT_INDICES: tuple[int, ...] = ()
+SAVE_DPI = 220
+SHOW_FIGURES = True
+
+FIRST_PLOT_METHOD_BOX = False
+FIRST_PLOT_SHOW_NUMBERS = False
+FIRST_PLOT_SHOW_LEGEND = False
+DEDUPLICATE_PATIENT_IDS = True
+
+# --- Optional DATA groups -----------------------------------------------------
+# --- HOTSPOT SETTINGS ----------------------------
+HOTSPOT_MIN_PROMINENCE = 0.05
+HOTSPOT_INCLUDE_ENDPOINTS = True
+
+# Empty tuple = no grouping/comparison; the whole cohort is simulated once.
+
+DATA_GROUPS = (
+    {
+        "name": "hotspots_0",
+        "label": "Group 1 | 0 Hotspots",
+        "conditions": (("hotspot_count", "==", 0),),
+    },
+    {
+        "name": "hotspots_1",
+        "label": "Group 2 | 1 Hotspot",
+        "conditions": (("hotspot_count", "==", 1),),
+    },
+    {
+        "name": "hotspots_2",
+        "label": "Group 3 | 2 Hotspots",
+        "conditions": (("hotspot_count", "==", 2),),
+    },
+    {
+        "name": "hotspots_3",
+        "label": "Group 4 | 3 Hotspots",
+        "conditions": (("hotspot_count", "==", 3),),
+    },
+)
+
+"""
+DATA_GROUPS = (
+    {
+        "name": "mild",
+        "label": "Milde mJOA Score",
+        "conditions": (("total_mjoa_BL", ">", 14),),
+    },
+    {
+        "name": "moderate",
+        "label": "Moderate mJOA Score",
+        "conditions": (("total_mjoa_BL", ">", 11), ("total_mjoa_BL", "<", 15)),
+    },
+    {
+        "name": "severe",
+        "label": "Severe mJOA Score",
+        "conditions": (("total_mjoa_BL", "<", 12),),
+    }
+)
+
+DATA_GROUPS = ()
+"""
+
+CREATE_STANDARD_PLOTS_FOR_EACH_DATA_GROUP = True
+CREATE_POPULATION_AVERAGE_COMPARISON = True
+
+# IMPORTANT DATABASE NAMING:
+# In this study, C2_* corresponds to C2/C3, C3_* to C3/C4, ..., C7_* to C7/T1.
+# For templates you may use ANY of these placeholders:
+#   {level}       -> C2, C3, ..., C7
+#   {level_lower} -> c2, c3, ..., c7
+#   {segment_db}  -> c2_3, c3_4, ..., c7_1
+#   {segment}     -> C2/C3, C3/C4, ..., C7/T1
+#
+# Therefore BOTH of these work in direct mode:
+#   "{level}_amp_ax_or_sag_BL"
+#   "{segment_db}_max_amplitude_v2_BL"
+
+# All transformations use the same six source motion columns.
+# The minimum is calculated separately for each patient (row).
+MODE_RAW = {
+    "title": "Raw motion amplitude", "colorbar_label": "Motion amplitude",
+    "column_template": f"{{level}}_{MOTION}",
+}
+INTERSEGMENTAL_DISTANCE_MM = 15.0  # Approximately equal spacing: 14.8–15.1 mm [3].
+
+MODE_RATIO_TO_C2 = {
+    "title": "Ratio to C2", "colorbar_label": "Ratio to C2",
+    "column_template": f"{{level}}_{MOTION}", "reference_level": "c2",
+}
+
+ALL_SIMULATION_MODES = (
+    "raw", "ratio_to_c2", "ratio_to_min", "diff_to_min",
+    "gradient_down", "gradient_up", "contrast", "abs_contrast",
+    "signed_strain", "abs_strain", "interseg_diff",
+    "curvature", "concentration",
+)
+
+# ---------------------------------------------------------------------------
+# COLOR MAP
+# ---------------------------------------------------------------------------
+# Turbo Coloring + Addition
+SIMULATION_COLORS = [
+    (0.000 / 2, "#30123B"),
+    (0.300 / 2, "#477BF2"),
+    (0.500 / 2, "#28BCEB"),
+    (0.771 / 2, "#38F491"),
+    (1.200 / 2, "#E5FA03"),
+    #(1.200 / 2, "#E1DD37"),
+    (1.500 / 2, "#FB7E21"),
+    (2.000 / 2, "#7A0403"),
+]
+# =============================================================================
+# 0. Load Data
+# =============================================================================
+def load_data() -> tuple[pd.DataFrame, ColumnMap]:
+    d = pd.read_excel(FILE_PATH, sheet_name=SHEET_NAME)
+
+    data = d[d['maximum_stenosis_BL']==4]
+
+    # Preserve the original database row before any filtering/reset_index().
+    # Several downstream audit/deduplication functions rely on this stable key.
+    if "source_row_index" not in data.columns:
+        data.insert(0, "source_row_index", data.index)
+
+    data, motion_columns = build_simulation_variables(data)
+    columns = resolve_columns(data, motion_columns)
+
+    data = data.copy()
+    data[columns.all_columns] = data[columns.all_columns].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    return data, columns
+
+# =============================================================================
+# 1. SETTINGS
+# =============================================================================
+# Change ONLY this section to run another simulation.
+
+def make_simulation_cmap() -> LinearSegmentedColormap:
+    """Create the simulation colormap from the editable SETTINGS above."""
+    positions = [float(position) for position, _ in SIMULATION_COLORS]
+
+    if not SIMULATION_COLORS:
+        raise ValueError("SIMULATION_COLORS must contain at least one color.")
+
+    if positions[0] != 0.0 or positions[-1] != 1.0:
+        raise ValueError(
+            "SIMULATION_COLORS must start at position 0.0 and end at 1.0."
+        )
+
+    if any(not 0.0 <= position <= 1.0 for position in positions):
+        raise ValueError("All SIMULATION_COLORS positions must be between 0 and 1.")
+
+    if any(b <= a for a, b in zip(positions, positions[1:])):
+        raise ValueError(
+            "SIMULATION_COLORS positions must be strictly increasing."
+        )
+
+    return LinearSegmentedColormap.from_list(
+        SIMULATION_CMAP_NAME,
+        SIMULATION_COLORS,
+    )
+
+
+SIMULATION_CMAP = make_simulation_cmap()
+
+# Register once under a stable name. The existing plotting functions can then
+# continue to use mpl.colormaps[MOTION_CMAP].
+if SIMULATION_CMAP_NAME not in mpl.colormaps:
+    mpl.colormaps.register(SIMULATION_CMAP, name=SIMULATION_CMAP_NAME)
+
+MOTION_CMAP = SIMULATION_CMAP_NAME
+
+
+MOTION_PERCENTILE_RANGE = (2.0, 98.0)
+MOTION_FIXED_RANGE: Optional[tuple[float, float]] = None
+GEOMETRY_POINTS_FULL = 420
+GEOMETRY_POINTS_COMPACT = 180
+MOTION_RASTER_COLUMNS_FULL = 48
+MOTION_RASTER_COLUMNS_COMPACT = 20
+MM_TO_PLOT = 0.145
+
+STENOSIS_AFFECTED_SIDE_CSF_FRACTION = {1: 0.50, 2: 0.30, 3: 0.12, 4: 0.00}
+MINOR_DEFORMATION_ANTERIOR_CSF_FRACTION = 0.46
+ANTERIOR_LIGAMENT_GAP = 0.015
+POSTERIOR_LIGAMENT_GAP = -0.15
+
+TERMINAL_PREVIEW_ROWS = 45
+ANNOTATION_FONT_SIZE = 8.0
+TITLE_FONT_SIZE = 11.0
+COMPACT_TITLE_FONT_SIZE = 9.0
+
+# --- Anatomical/database settings (always used) ------------------------------
+SEGMENTS = ["C2/C3", "C3/C4", "C4/C5", "C5/C6", "C6/C7"]
+SEGMENTS2 = ["c2_3", "c3_4", "c4_5", "c5_6", "c6_7", "c7_1"]
+MEASUREMENT_SEGMENTS = ["C2/C3", "C3/C4", "C4/C5", "C5/C6", "C6/C7", "C7/T1"]
+LEVEL_Y = np.array([5., 4., 3., 2., 1., 0.])
+SEGMENT_Y = np.array([4.5, 3.5, 2.5, 1.5, 0.5])
+MEASUREMENT_Y = np.array([4.5, 3.5, 2.5, 1.5, 0.5, -0.5])
+
+CANAL_AP_COLUMNS = {level: f"{level.lower()}_ap_sag_BL" for level in LEVELS}
+CORD_AP_COLUMNS = {level: f"{level.lower()}_myelon_ap_sag_BL" for level in LEVELS}
+
+# Cohort inclusion is independent of the displayed simulation mode.
+COHORT_MOTION_COLUMN_TEMPLATE = f"{{level}}_{MOTION}"
+COHORT_REQUIRED_MOTION_COLUMNS = [
+    COHORT_MOTION_COLUMN_TEMPLATE.format(level=level) for level in LEVELS
+]
+
+STENOSIS_COLUMNS = {segment: f"stenosis_{segment}_BL" for segment in SEGMENTS2}
+COMPRESSION_SIDE_COLUMNS = {}
+MAXIMUM_STENOSIS_COLUMN: Optional[str] = ""
+MAXIMUM_STENOSIS_CODE_TO_LEVEL = {1:"C2",2:"C3",3:"C4",4:"C5",5:"C6",6:"C7"}
+
+# COHORT_REQUIRED_MOTION_COLUMNS = [f"{level.lower()}_amplitude_hf_BL" for level in LEVELS]
+
+
+def selected_comparison_modes():
+    if isinstance(COMPARISON, str):
+        if COMPARISON.lower() == "all":
+            return ALL_SIMULATION_MODES
+        raise ValueError("COMPARISON must be 'all' or a list of mode names.")
+    modes = tuple(str(mode).strip().lower() for mode in COMPARISON)
+    if not modes or len(set(modes)) != len(modes):
+        raise ValueError("COMPARISON must contain distinct mode names.")
+    unknown = set(modes) - set(ALL_SIMULATION_MODES)
+    if unknown:
+        raise ValueError(f"Unknown comparison modes: {sorted(unknown)}")
+    return modes
+
+# Each mode is written into its OWN output subfolder. This prevents plots from
+# different modes/runs being mixed in the same directory.
+SEPARATE_OUTPUT_BY_MODE = True
+
+PLOT_TITLES = {
+    # Standalone plots
+    "single_patient": "{simulation} | {group} | ID {patient}",
+    "population_average": "{simulation} | {group} | Mean",
+
+    # Titles of individual subplots in multi-patient figures
+    "multi_patient": "ID {patient}",
+
+    # Suptitles of multi-patient figures
+    "multi_full": "{simulation} | {group}",
+    "multi_canal": "{simulation} | {group} | Canal",
+    "multi_cord": "{simulation} | {group} | Only Cord",
+
+    # Population comparison
+    "population_comparison": "{simulation} | Group means",
+}
+
+
+# =============================================================================
+# 2. MODE RESOLUTION - do not edit
+# =============================================================================
+
+@dataclass(frozen=True)
+class SimulationConfig:
+    mode: str
+    title: str
+    colorbar_label: str
+    labels: tuple[str, ...]
+    y: np.ndarray
+    specifications: dict[str, dict[str, object]]
+
+def _template_values(index: int) -> dict[str, str]:
+    """All supported placeholders for one study measurement position."""
+    return {
+        "level": LEVELS[index],
+        "level_lower": LEVELS[index].lower(),
+        "segment_db": SEGMENTS2[index],
+        "segment": MEASUREMENT_SEGMENTS[index],
+    }
+
+def format_simulation_column(template: str, index: int) -> str:
+    """Format a database-column template with all supported placeholders."""
+    try:
+        return str(template).format(**_template_values(index))
+    except KeyError as exc:
+        supported = "{level}, {level_lower}, {segment_db}, {segment}"
+        raise ValueError(
+            f"Unknown placeholder {exc!s} in simulation column template "
+            f"{template!r}. Supported placeholders: {supported}."
+        ) from exc
+
+def resolve_simulation_config(
+    requested_mode: Optional[str] = None,
+) -> SimulationConfig:
+    mode = str(
+        SIMULATION_MODE if requested_mode is None else requested_mode
+    ).strip().lower()
+
+    if mode not in ALL_SIMULATION_MODES:
+        raise ValueError(f"Unknown simulation mode {mode!r}. Choose from {ALL_SIMULATION_MODES}.")
+
+    template = str(MODE_RAW["column_template"])
+    source = [format_simulation_column(template, i) for i in range(len(LEVELS))]
+    specs = {}
+    labels = []
+    positions = []
+
+    for i, level in enumerate(LEVELS):
+        if mode == "raw":
+            spec = {"type": "column", "column": source[i]}
+        elif mode == "ratio_to_c2":
+            ref = str(MODE_RATIO_TO_C2["reference_level"])
+            spec = {"type": "ratio", "numerator": source[i],
+                    "denominator": source[LEVELS.index(ref)]}
+        elif mode in {"ratio_to_min", "diff_to_min"}:
+            spec = {"type": mode, "numerator": source[i], "sources": source}
+        elif mode == "gradient_down":
+            if i == len(LEVELS) - 1:
+                continue  # no inferior measurement for C7
+            spec = {"type": "ratio", "numerator": source[i],
+                    "denominator": source[i + 1]}
+        elif mode == "gradient_up":
+            if i == 0:
+                continue  # no superior measurement for C2
+            spec = {"type": "ratio", "numerator": source[i],
+                    "denominator": source[i - 1]}
+        elif mode in {"signed_strain", "abs_strain", "interseg_diff"}:
+            if i == len(LEVELS) - 1:
+                continue  # no next caudal measurement
+            spec = {"type": mode, "current": source[i], "next": source[i + 1]}
+        elif mode == "curvature":
+            if i == 0 or i == len(LEVELS) - 1:
+                continue  # centered second difference requires two neighbors
+            spec = {"type": mode, "current": source[i],
+                    "lower": source[i + 1], "upper": source[i - 1]}
+        elif mode == "concentration":
+            spec = {"type": mode, "numerator": source[i], "sources": source}
+        elif mode in {"contrast", "abs_contrast"}:
+            # Boundary values outside C2...C7 are defined as zero.
+            # C2: C2 / (C3 - 0); C7: C7 / (0 - C6).
+            spec = {"type": mode, "numerator": source[i],
+                    "lower": source[i + 1] if i + 1 < len(LEVELS) else None,
+                    "upper": source[i - 1] if i > 0 else None}
+        specs[MEASUREMENT_SEGMENTS[i]] = spec
+        labels.append(level)
+        positions.append(MEASUREMENT_Y[i])
+
+    titles = {
+        "raw": "Raw motion amplitude",
+        "ratio_to_c2": "Ratio to C2",
+        "ratio_to_min": "Ratio to minimum",
+        "diff_to_min": "Difference to minimum",
+        "gradient_down": "Gradient down",
+        "gradient_up": "Gradient up",
+        "contrast": "Contrast",
+        "abs_contrast": "Absolute contrast",
+        "signed_strain": "Signed strain",
+        "abs_strain": "Absolute strain",
+        "interseg_diff": "Intersegmental difference",
+        "curvature": "Curvature",
+        "concentration": "Concentration",
+    }
+    return SimulationConfig(
+        mode=mode, title=titles[mode], colorbar_label=titles[mode],
+        labels=tuple(labels), y=np.array(positions, dtype=float),
+        specifications=specs,
+    )
+
+
+def activate_simulation_mode(mode: str) -> SimulationConfig:
+    """Activate exactly one concrete simulation mode for downstream functions."""
+    global SIMULATION_CONFIG
+    global SIMULATION_TITLE
+    global SIMULATION_COLORBAR_LABEL
+    global SIMULATION_VARIABLES
+    global SIMULATION_Y
+    global SIMULATION_VALUE_LABELS
+
+    config = resolve_simulation_config(mode)
+    SIMULATION_CONFIG = config
+    SIMULATION_TITLE = config.title
+    SIMULATION_COLORBAR_LABEL = config.colorbar_label
+    SIMULATION_VARIABLES = config.specifications
+    SIMULATION_Y = config.y
+    SIMULATION_VALUE_LABELS = config.labels
+    return config
+
+
+# In comparison mode a concrete mode is activated by main() before data loading.
+# A direct-mode placeholder keeps module-level helper definitions valid.
+_INITIAL_MODE = (
+    "raw"
+    if str(SIMULATION_MODE).strip().lower() == "comparison"
+    else str(SIMULATION_MODE).strip().lower()
+)
+activate_simulation_mode(_INITIAL_MODE)
+
+# =============================================================================
+# 3. Data and Data structures
+# =============================================================================
+
+def _simulation_source_columns(spec):
+    kind = str(spec.get("type", "column")).lower()
+    if kind == "column":
+        return [str(spec["column"])]
+    if kind in {"ratio_to_min", "diff_to_min"}:
+        return list(spec["sources"])
+    if kind in {"signed_strain", "abs_strain", "interseg_diff"}:
+        return [str(spec["current"]), str(spec["next"])]
+    if kind == "curvature":
+        return [str(spec[key]) for key in ("current", "lower", "upper")]
+    if kind == "concentration":
+        return list(spec["sources"])
+    if kind in {"contrast", "abs_contrast"}:
+        return [str(spec[key]) for key in ("numerator", "lower", "upper")
+                if spec.get(key) is not None]
+    if kind == "ratio":
+        return [str(spec["numerator"]), str(spec["denominator"])]
+    if kind in {"difference", "sum", "product"}:
+        return [str(spec["left"]), str(spec["right"])]
+    if kind == "expression":
+        return re.findall(r"`([^`]+)`", str(spec["expression"]))
+    raise ValueError(f"Unsupported simulation variable type: {kind!r}")
+
+
+def build_simulation_variables(data):
+    """Resolve all configured simulation formulas into internal columns."""
+    data = data.copy()
+    resolved = {}
+    missing = sorted({
+        col for spec in SIMULATION_VARIABLES.values()
+        for col in _simulation_source_columns(spec)
+        if col not in data.columns
+    })
+    if missing:
+        raise KeyError("Missing SIMULATION_VARIABLES columns:\n" +
+                       "\n".join(f"- {x}" for x in missing))
+
+    for level, spec in SIMULATION_VARIABLES.items():
+        kind = str(spec.get("type", "column")).lower()
+        name = f"__simulation_{level}"
+        if kind == "column":
+            v = pd.to_numeric(data[str(spec["column"])], errors="coerce")
+        elif kind == "ratio":
+            a = pd.to_numeric(data[str(spec["numerator"])], errors="coerce")
+            b = pd.to_numeric(data[str(spec["denominator"])], errors="coerce")
+            v = a / b.replace(0, np.nan)
+        elif kind in {"ratio_to_min", "diff_to_min"}:
+            values = data[list(spec["sources"])].apply(pd.to_numeric, errors="coerce")
+            minimum = values.min(axis=1, skipna=True)
+            numerator = pd.to_numeric(data[str(spec["numerator"])], errors="coerce")
+            v = (numerator / minimum.replace(0, np.nan)
+                 if kind == "ratio_to_min" else numerator - minimum)
+        elif kind in {"signed_strain", "abs_strain", "interseg_diff"}:
+            current = pd.to_numeric(data[str(spec["current"])], errors="coerce")
+            following = pd.to_numeric(data[str(spec["next"])], errors="coerce")
+            difference = following - current
+            if kind == "interseg_diff":
+                v = difference
+            elif kind == "signed_strain":
+                v = difference / INTERSEGMENTAL_DISTANCE_MM
+            else:
+                v = difference.abs() / INTERSEGMENTAL_DISTANCE_MM
+        elif kind == "curvature":
+            current = pd.to_numeric(data[str(spec["current"])], errors="coerce")
+            lower = pd.to_numeric(data[str(spec["lower"])], errors="coerce")
+            upper = pd.to_numeric(data[str(spec["upper"])], errors="coerce")
+            v = lower - 2 * current + upper
+        elif kind == "concentration":
+            values = data[list(spec["sources"])].apply(pd.to_numeric, errors="coerce")
+            total = values.sum(axis=1, min_count=len(spec["sources"]))
+            numerator = pd.to_numeric(data[str(spec["numerator"])], errors="coerce")
+            v = numerator / total.replace(0, np.nan)
+        elif kind in {"contrast", "abs_contrast"}:
+            numerator = pd.to_numeric(data[str(spec["numerator"])], errors="coerce")
+            lower = (pd.to_numeric(data[str(spec["lower"])], errors="coerce")
+                     if spec["lower"] is not None else 0.0)
+            upper = (pd.to_numeric(data[str(spec["upper"])], errors="coerce")
+                     if spec["upper"] is not None else 0.0)
+            denominator = lower - upper
+            if kind == "abs_contrast":
+                denominator = denominator.abs()
+            v = numerator / denominator.replace(0, np.nan)
+        elif kind in {"difference", "sum", "product"}:
+            a = pd.to_numeric(data[str(spec["left"])], errors="coerce")
+            b = pd.to_numeric(data[str(spec["right"])], errors="coerce")
+            v = {"difference": a-b, "sum": a+b, "product": a*b}[kind]
+        elif kind == "expression":
+            tmp = data.copy()
+            for col in _simulation_source_columns(spec):
+                tmp[col] = pd.to_numeric(tmp[col], errors="coerce")
+            v = tmp.eval(str(spec["expression"]), engine="python")
+        else:
+            raise ValueError(f"Unsupported simulation variable type: {kind!r}")
+        data[name] = pd.to_numeric(v, errors="coerce").replace([np.inf, -np.inf], np.nan)
+        resolved[str(level)] = name
+    return data, resolved
+
+
+@dataclass(frozen=True)
+class ColumnMap:
+    canal_ap: dict[str, str]
+    cord_ap: dict[str, str]
+    motion: dict[str, str]
+    stenosis: dict[str, str]
+    compression_side: dict[str, str]
+    maximum_stenosis: Optional[str]
+
+    @property
+    def all_columns(self) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [
+                    *self.canal_ap.values(),
+                    *self.cord_ap.values(),
+                    *self.motion.values(),
+                    *self.stenosis.values(),
+                    *self.compression_side.values(),
+                    *([self.maximum_stenosis] if self.maximum_stenosis else []),
+                ]
+            )
+        )
+
+    @property
+    def motion_required_columns(self) -> list[str]:
+        return list(self.motion.values())
+
+    @property
+    def optional_anatomy_columns(self) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [
+                    *self.canal_ap.values(),
+                    *self.cord_ap.values(),
+                    *self.stenosis.values(),
+                    *self.compression_side.values(),
+                    *([self.maximum_stenosis] if self.maximum_stenosis else []),
+                ]
+            )
+        )
+
+
+@dataclass(slots=True)
+class SpineProfile:
+    canal_ap_segment_mm: np.ndarray
+    cord_ap_segment_mm: np.ndarray
+    motion_segment_raw: np.ndarray
+    motion_segment_filled: np.ndarray
+    csf_ap_segment_mm: np.ndarray
+    stenosis_severity_segment: np.ndarray
+    compression_side_segment: np.ndarray
+    maximum_level: Optional[str]
+    compression_geometry_supported_segment: np.ndarray
+
+
+@dataclass(slots=True)
+class DenseGeometry:
+    y: np.ndarray
+    canal_left: np.ndarray
+    canal_right: np.ndarray
+    cord_left: np.ndarray
+    cord_right: np.ndarray
+    motion: np.ndarray
+
+
+# =============================================================================
+# 4. Loading, validation, filtering, de-duplication, audit
+# =============================================================================
+
+def enabled_optional_mapping(
+    configured: dict[str, object] | None | bool,
+) -> dict[str, str]:
+    """Return only enabled optional database columns.
+
+    The complete optional mapping can be disabled with None/False, and single
+    entries may likewise be set to None/False.
+    """
+    if configured is None or configured is False:
+        return {}
+    if not isinstance(configured, dict):
+        raise TypeError("Optional column configuration must be a dict, None, or False.")
+    return {
+        key: str(value)
+        for key, value in configured.items()
+        if value is not None and value is not False and str(value).strip()
+    }
+
+
+def resolve_columns(
+    dataframe: pd.DataFrame,
+    motion_columns: dict[str, str],
+) -> ColumnMap:
+    stenosis_columns = enabled_optional_mapping(STENOSIS_COLUMNS)
+    compression_side_columns = enabled_optional_mapping(COMPRESSION_SIDE_COLUMNS)
+    maximum_stenosis_column = (
+        str(MAXIMUM_STENOSIS_COLUMN)
+        if MAXIMUM_STENOSIS_COLUMN is not None
+        and MAXIMUM_STENOSIS_COLUMN is not False
+        and str(MAXIMUM_STENOSIS_COLUMN).strip()
+        else None
+    )
+
+    exact_columns = {
+        **CANAL_AP_COLUMNS,
+        **CORD_AP_COLUMNS,
+        **motion_columns,
+        **stenosis_columns,
+        **compression_side_columns,
+    }
+    missing = [
+        column_name
+        for column_name in exact_columns.values()
+        if column_name not in dataframe.columns
+    ]
+
+    if (
+        maximum_stenosis_column is not None
+        and maximum_stenosis_column not in dataframe.columns
+    ):
+        missing.append(maximum_stenosis_column)
+    if PATIENT_ID_COLUMN not in dataframe.columns:
+        missing.append(PATIENT_ID_COLUMN)
+
+    if missing:
+        raise KeyError(
+            "The following database columns are missing:\n"
+            + "\n".join(f"- {name}" for name in missing)
+        )
+
+    return ColumnMap(
+        canal_ap=CANAL_AP_COLUMNS.copy(),
+        cord_ap=CORD_AP_COLUMNS.copy(),
+        motion=motion_columns.copy(),
+        stenosis=stenosis_columns,
+        compression_side=compression_side_columns,
+        maximum_stenosis=maximum_stenosis_column,
+    )
+
+
+def patient_id_key(value: object) -> Optional[str]:
+    """Stable key used only for duplicate detection."""
+    if pd.isna(value):
+        return None
+
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        if np.isfinite(numeric) and numeric.is_integer():
+            return str(int(numeric))
+        return str(numeric)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        numeric = float(text)
+        if np.isfinite(numeric) and numeric.is_integer():
+            return str(int(numeric))
+    except ValueError:
+        pass
+
+    return text
+
+
+def format_patient_id(value: object) -> str:
+    """
+    Display integer-like IDs without a decimal suffix.
+    Example: 4.0 -> "4".
+    """
+    key = patient_id_key(value)
+    if key is None:
+        raise ValueError("Patient ID is missing.")
+    return key
+
+
+def filter_motion_complete_cases(
+    data: pd.DataFrame,
+    columns: ColumnMap,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Keep the cohort fixed across modes using the original six motion columns."""
+    required = list(COHORT_REQUIRED_MOTION_COLUMNS)
+    missing_db = [column for column in required if column not in data.columns]
+    if missing_db:
+        raise KeyError(
+            "Missing cohort-defining motion columns:\n"
+            + "\n".join(f"- {column}" for column in missing_db)
+        )
+    numeric = data[required].apply(pd.to_numeric, errors="coerce")
+    missing_motion = numeric.isna()
+    keep_mask = ~missing_motion.any(axis=1)
+    excluded_records = []
+    for row_index in data.index[~keep_mask]:
+        missing_columns = missing_motion.columns[
+            missing_motion.loc[row_index].to_numpy()
+        ].tolist()
+        excluded_records.append({
+            "source_row_index": data.loc[row_index, "source_row_index"]
+            if "source_row_index" in data.columns
+            else row_index,
+            PATIENT_ID_COLUMN: data.loc[row_index, PATIENT_ID_COLUMN],
+            "exclusion_reason": "missing_required_cohort_motion",
+            "number_missing_required_motion_values": len(missing_columns),
+            "missing_required_motion_columns": "; ".join(missing_columns),
+        })
+    return (
+        data.loc[keep_mask].copy().reset_index(drop=True),
+        pd.DataFrame(excluded_records),
+    )
+
+
+def deduplicate_patient_rows(
+    data: pd.DataFrame,
+    columns: ColumnMap,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Ensure that one patient ID is plotted at most once.
+
+    If the same ID occurs multiple times after the motion filter, keep the row
+    with the largest number of available optional anatomy values. Ties are
+    resolved by the earliest source row.
+    """
+    if not DEDUPLICATE_PATIENT_IDS:
+        return data.reset_index(drop=True), pd.DataFrame()
+
+    work = data.copy()
+
+    # Defensive fallback: deduplication must never depend on load_data()
+    # having created this helper column. If it is absent for any reason,
+    # reconstruct a stable source-row identifier from the current index.
+    if "source_row_index" not in work.columns:
+        work.insert(0, "source_row_index", work.index)
+
+    work["_patient_id_key"] = work[PATIENT_ID_COLUMN].map(patient_id_key)
+
+    missing_id_mask = work["_patient_id_key"].isna()
+    missing_id_report = work.loc[
+        missing_id_mask,
+        ["source_row_index", PATIENT_ID_COLUMN],
+    ].copy()
+    if not missing_id_report.empty:
+        missing_id_report["duplicate_action"] = "excluded_missing_patient_id"
+
+    work = work.loc[~missing_id_mask].copy()
+
+    anatomy_columns = columns.optional_anatomy_columns
+    work["_anatomy_values_present"] = work[anatomy_columns].notna().sum(axis=1)
+
+    duplicate_mask = work["_patient_id_key"].duplicated(keep=False)
+    duplicate_rows = work.loc[
+        duplicate_mask,
+        [
+            "source_row_index",
+            PATIENT_ID_COLUMN,
+            "_patient_id_key",
+            "_anatomy_values_present",
+        ],
+    ].copy()
+
+    work = work.sort_values(
+        by=["_patient_id_key", "_anatomy_values_present", "source_row_index"],
+        ascending=[True, False, True],
+        kind="stable",
+    )
+
+    kept_source_rows = set(
+        work.drop_duplicates("_patient_id_key", keep="first")[
+            "source_row_index"
+        ].tolist()
+    )
+
+    if not duplicate_rows.empty:
+        duplicate_rows["duplicate_action"] = duplicate_rows[
+            "source_row_index"
+        ].map(
+            lambda row_index: (
+                "kept_best_anatomy_row"
+                if row_index in kept_source_rows
+                else "excluded_duplicate_patient_id"
+            )
+        )
+
+    deduplicated = work.drop_duplicates("_patient_id_key", keep="first").copy()
+    deduplicated = deduplicated.sort_values("source_row_index", kind="stable")
+    deduplicated = deduplicated.drop(
+        columns=["_patient_id_key", "_anatomy_values_present"]
+    ).reset_index(drop=True)
+
+    duplicate_report = pd.concat(
+        [duplicate_rows, missing_id_report],
+        ignore_index=True,
+        sort=False,
+    )
+
+    if deduplicated.empty:
+        raise ValueError("No identifiable patients remain after ID validation.")
+
+    return deduplicated, duplicate_report
+
+
+def export_data_audit(
+    data: pd.DataFrame,
+    columns: ColumnMap,
+    profiles: list[SpineProfile],
+) -> None:
+    resolved = {
+        "excel_file": str(FILE_PATH),
+        "sheet": SHEET_NAME,
+        "patient_id_column": PATIENT_ID_COLUMN,
+        "filtering_policy": (
+            "Only complete motion data are required. "
+            "Anatomy variables are optional per patient."
+        ),
+        "geometry_interpolation": (
+            "All study variables named C2_*/c2_* are positioned at C2/C3, "
+            "C3_* at C3/C4, ..., C7_* at C7/T1. Missing per-patient AP "
+            "values are filled between these segment control points; visible "
+            "geometry is connected with shape-preserving PCHIP."
+        ),
+        "stenosis_policy": (
+            "Stenosis severity uses stenosis_c2_3_BL ... stenosis_c6_7_BL "
+            "(1 none, 2 mild, 3 moderate, 4 severe). Compression side uses "
+            "c2_cord_compress_side_BL ... c6_cord_compress_side_BL "
+            "(1 anterior/left, 2 posterior/right, 3 bilateral, 4 minor deformation). "
+            "Missing side is treated as neutral/bilateral. Directional displacement "
+            "is applied only where canal AP and cord AP are both directly measured. "
+            "Total CSF is canal AP - cord AP; severity and side only distribute that "
+            "available CSF."
+        ),
+        "canal_ap_columns": columns.canal_ap,
+        "cord_ap_columns": columns.cord_ap,
+        "motion_columns": columns.motion,
+        "simulation_variables": SIMULATION_VARIABLES,
+        "simulation_title": SIMULATION_TITLE,
+        "csf_ap_method": "derived as max(canal AP - cord AP, 0)",
+        "stenosis_severity_columns": columns.stenosis,
+        "compression_side_columns": columns.compression_side,
+        "maximum_stenosis_column": columns.maximum_stenosis,
+    }
+    (OUTPUT_DIRECTORY / "resolved_columns.json").write_text(
+        json.dumps(resolved, indent=2),
+        encoding="utf-8",
+    )
+
+    records: list[dict[str, object]] = []
+    for index, profile in enumerate(profiles):
+        row = data.iloc[index]
+        record: dict[str, object] = {
+            "filtered_row_index": index,
+            "source_row_index": row["source_row_index"],
+            "patient_id": format_patient_id(row[PATIENT_ID_COLUMN]),
+        }
+
+        for segment, canal_value, cord_value, csf_value in zip(
+            MEASUREMENT_SEGMENTS,
+            profile.canal_ap_segment_mm,
+            profile.cord_ap_segment_mm,
+            profile.csf_ap_segment_mm,
+        ):
+            key = segment.replace("/", "_")
+            record[f"{key}_canal_AP_used_mm"] = canal_value
+            record[f"{key}_cord_AP_used_mm"] = cord_value
+            record[f"{key}_CSF_AP_used_mm"] = csf_value
+
+        for segment, severity, side in zip(
+            SEGMENTS,
+            profile.stenosis_severity_segment,
+            profile.compression_side_segment,
+        ):
+            key = segment.replace("/", "_")
+            record[f"{key}_stenosis_severity_used"] = int(severity)
+            record[f"{key}_compression_side_used"] = int(side)
+            segment_index = SEGMENTS.index(segment)
+            record[f"{key}_directional_compression_applied"] = bool(
+                profile.compression_geometry_supported_segment[segment_index]
+                and int(severity) > 1
+                and int(side) in (1, 2, 4)
+            )
+
+        for sim_label, raw_value, filled_value in zip(
+            SIMULATION_VALUE_LABELS,
+            profile.motion_segment_raw,
+            profile.motion_segment_filled,
+        ):
+            key = safe_filename(sim_label)
+            record[f"{key}_simulation_raw"] = raw_value
+            record[f"{key}_simulation_used"] = filled_value
+
+        record["maximum_stenosis_level_used"] = profile.maximum_level
+        records.append(record)
+
+    pd.DataFrame(records).to_csv(
+        OUTPUT_DIRECTORY / "values_used_by_patient.csv",
+        index=False,
+    )
+
+
+# =============================================================================
+# 5. Numerical helpers
+# =============================================================================
+
+def finite_median(values: np.ndarray, fallback: float) -> float:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    return float(np.median(values)) if values.size else float(fallback)
+
+
+def interpolate_missing(
+    x: np.ndarray,
+    values: np.ndarray,
+    fallback: float,
+) -> np.ndarray:
+    """
+    Fill missing control-point values with straight/linear interpolation.
+
+    - Between two known points: linear interpolation.
+    - Outside the known range: nearest known endpoint is extended.
+    - One known point only: constant value.
+    - No known points: fallback value.
+    """
+    x = np.asarray(x, dtype=float)
+    values = np.asarray(values, dtype=float)
+    if x.size != values.size:
+        raise ValueError(
+            f"interpolate_missing: {x.size} coordinates but {values.size} values. "
+            "Check the active simulation mode."
+        )
+    valid = np.isfinite(values)
+
+    if not valid.any():
+        return np.full_like(values, fallback, dtype=float)
+
+    if valid.sum() == 1:
+        return np.full_like(values, float(values[valid][0]), dtype=float)
+
+    order = np.argsort(x)
+    xs = x[order]
+    vs = values[order]
+    valid_sorted = np.isfinite(vs)
+
+    interpolated_sorted = np.interp(
+        xs,
+        xs[valid_sorted],
+        vs[valid_sorted],
+    )
+
+    result = np.empty_like(interpolated_sorted)
+    result[order] = interpolated_sorted
+    return result
+
+
+def pchip_interpolate(
+    x: np.ndarray | float,
+    node_x: np.ndarray,
+    node_values: np.ndarray,
+) -> np.ndarray:
+    """
+    Shape-preserving cubic Hermite interpolation (PCHIP).
+
+    PCHIP passes exactly through the control points, rounds sharp corners, and
+    avoids the overshoot/new extrema that a conventional cubic spline may
+    introduce. Outside the measured control-point range, the nearest endpoint
+    value is held constant.
+
+    Important:
+    Missing control-point values are NOT handled here. They are filled first
+    with `interpolate_missing()`, which remains strictly linear.
+    """
+    xp = np.asarray(node_x, dtype=float)
+    fp = np.asarray(node_values, dtype=float)
+    if xp.size != fp.size:
+        raise ValueError(
+            f"pchip_interpolate: {xp.size} coordinates but {fp.size} values."
+        )
+
+    order = np.argsort(xp)
+    xp = xp[order]
+    fp = fp[order]
+
+    if xp.size < 2:
+        return np.full_like(
+            np.asarray(x, dtype=float),
+            fp[0] if fp.size else np.nan,
+            dtype=float,
+        )
+
+    x_array = np.asarray(x, dtype=float)
+
+    # Clamp evaluation positions to the measured range so that no artificial
+    # extrapolation curve is created above/below the available anatomy.
+    x_clamped = np.clip(x_array, xp[0], xp[-1])
+
+    interpolator = PchipInterpolator(
+        xp,
+        fp,
+        extrapolate=False,
+    )
+
+    return np.asarray(interpolator(x_clamped), dtype=float)
+
+
+def robust_motion_norm(
+    data: pd.DataFrame,
+    columns: ColumnMap,
+) -> mpl.colors.Normalize:
+
+    if SCALE_EQUAL == 'True' and SCALE_ALL_EQUAL != 'True':
+        # Special case: shared color scale for ratio_to_min and diff_to_min
+        if SIMULATION_CONFIG.mode in {"ratio_to_min", "diff_to_min"}:
+
+            source_columns = [
+                format_simulation_column(
+                    MODE_RAW["column_template"], i
+                )
+                for i in range(len(LEVELS))
+            ]
+
+            raw_values = data[source_columns].apply(
+                pd.to_numeric, errors="coerce"
+            )
+
+            minimum = raw_values.min(axis=1, skipna=True)
+
+            ratio_values = raw_values.div(
+                minimum.replace(0, np.nan), axis=0
+            )
+
+            diff_values = raw_values.sub(minimum, axis=0)
+
+            # Combine both transformations for a shared scale
+            values = np.concatenate([
+                ratio_values.to_numpy(dtype=float).ravel(),
+                diff_values.to_numpy(dtype=float).ravel()
+            ])
+
+        else:
+            # Original behavior for all other simulation modes
+            values = data[
+                columns.motion_required_columns
+            ].to_numpy(dtype=float).ravel()
+
+        values = values[np.isfinite(values)]
+
+        if values.size == 0:
+            raise ValueError("No valid motion values were found.")
+
+        if MOTION_FIXED_RANGE is not None:
+            vmin, vmax = MOTION_FIXED_RANGE
+        else:
+            vmin, vmax = np.percentile(
+                values, MOTION_PERCENTILE_RANGE
+            )
+
+        if np.isclose(vmin, vmax):
+            padding = max(abs(vmin) * 0.10, 0.10)
+            vmin -= padding
+            vmax += padding
+
+        return mpl.colors.Normalize(
+            vmin=float(vmin),
+            vmax=float(vmax)
+        )
+
+    elif SCALE_EQUAL == 'False':
+        values = data[columns.motion_required_columns].to_numpy(dtype=float).ravel()
+        values = values[np.isfinite(values)]
+
+        if values.size == 0:
+            raise ValueError("No valid motion values were found.")
+
+        if MOTION_FIXED_RANGE is not None:
+            vmin, vmax = MOTION_FIXED_RANGE
+        else:
+            vmin, vmax = np.percentile(values, MOTION_PERCENTILE_RANGE)
+
+        if np.isclose(vmin, vmax):
+            padding = max(abs(vmin) * 0.10, 0.10)
+            vmin -= padding
+            vmax += padding
+
+        return mpl.colors.Normalize(vmin=float(vmin), vmax=float(vmax))
+
+    elif SCALE_ALL_EQUAL == 'True':
+        all_values = []
+
+        # Collect values from every simulation mode
+        for mode in ALL_SIMULATION_MODES:
+
+            config = resolve_simulation_config(mode)
+
+            # Temporarily use this mode's specifications
+            global SIMULATION_VARIABLES
+            previous_variables = SIMULATION_VARIABLES
+
+            try:
+                SIMULATION_VARIABLES = config.specifications
+                mode_data, resolved = build_simulation_variables(data)
+            finally:
+                SIMULATION_VARIABLES = previous_variables
+
+            values = mode_data[
+                list(resolved.values())
+            ].to_numpy(dtype=float).ravel()
+
+            all_values.append(values)
+
+        # Combine all simulation values
+        values = np.concatenate(all_values)
+        values = values[np.isfinite(values)]
+
+        if values.size == 0:
+            raise ValueError("No valid motion values were found.")
+
+        if MOTION_FIXED_RANGE is not None:
+            vmin, vmax = MOTION_FIXED_RANGE
+        else:
+            vmin, vmax = np.percentile(
+                values,
+                MOTION_PERCENTILE_RANGE
+            )
+
+        if np.isclose(vmin, vmax):
+            padding = max(abs(vmin) * 0.10, 0.10)
+            vmin -= padding
+            vmax += padding
+
+        return mpl.colors.Normalize(
+            vmin=float(vmin),
+            vmax=float(vmax)
+        )
+
+
+
+def detect_motion_hotspots(values):
+    values = np.asarray(values, dtype=float)
+
+    if not np.all(np.isfinite(values)):
+        return []
+
+    hotspots = []
+    n = len(values)
+
+    for i in range(n):
+        if i == 0:
+            if not HOTSPOT_INCLUDE_ENDPOINTS:
+                continue
+            neighbors = [values[1]]
+
+        elif i == n - 1:
+            if not HOTSPOT_INCLUDE_ENDPOINTS:
+                continue
+            neighbors = [values[n - 2]]
+
+        else:
+            neighbors = [values[i - 1], values[i + 1]]
+
+        # Strict local maximum
+        if all(values[i] > neighbor for neighbor in neighbors):
+            difference = values[i] - max(neighbors)
+
+            if difference >= HOTSPOT_MIN_PROMINENCE:
+                hotspots.append(i)
+
+    return hotspots
+
+
+def add_hotspot_groups(data):
+    data = data.copy()
+
+    motion_columns = [
+        format_simulation_column(
+            MODE_RAW["column_template"], i
+        )
+        for i in range(len(LEVELS))
+    ]
+
+    values = data[motion_columns].apply(
+        pd.to_numeric, errors="coerce"
+    )
+
+    hotspot_indices = [
+        detect_motion_hotspots(row)
+        for row in values.to_numpy(dtype=float)
+    ]
+
+    data["hotspot_count"] = [
+        len(indices) for indices in hotspot_indices
+    ]
+
+    data["hotspot_levels"] = [
+        ", ".join(LEVELS[i] for i in indices)
+        for indices in hotspot_indices
+    ]
+
+    return data
+
+
+def decode_maximum_level(value: float) -> Optional[str]:
+    if not np.isfinite(value):
+        return None
+    return MAXIMUM_STENOSIS_CODE_TO_LEVEL.get(int(round(value)))
+
+
+def build_profile(
+    row: pd.Series,
+    columns: ColumnMap,
+    global_motion_fallback: float,
+) -> SpineProfile:
+    canal_ap_raw = row[list(columns.canal_ap.values())].to_numpy(dtype=float)
+    cord_ap_raw = row[list(columns.cord_ap.values())].to_numpy(dtype=float)
+    motion_raw = row[list(columns.motion.values())].to_numpy(dtype=float)
+    stenosis_raw = np.array([
+        float(row[columns.stenosis[key]])
+        if key in columns.stenosis else np.nan
+        for key in SEGMENTS2
+    ], dtype=float)
+    compression_side_raw = np.array([
+        float(row[columns.compression_side[key]])
+        if key in columns.compression_side else np.nan
+        for key in SEGMENTS
+    ], dtype=float)
+
+    # Study naming is segment-based for ALL C2...C7 measurements:
+    # C2_* = C2/C3, C3_* = C3/C4, ..., C7_* = C7/T1.
+    canal_ap = interpolate_missing(
+        MEASUREMENT_Y, canal_ap_raw, finite_median(canal_ap_raw, 9.0)
+    )
+    cord_ap = interpolate_missing(
+        MEASUREMENT_Y, cord_ap_raw, finite_median(cord_ap_raw, 5.5)
+    )
+
+    canal_ap = np.clip(canal_ap, 0.5, None)
+    cord_ap = np.clip(cord_ap, 0.02, canal_ap)
+    csf_ap = np.maximum(canal_ap - cord_ap, 0.0)
+
+    motion_filled = interpolate_missing(
+        SIMULATION_Y, motion_raw, global_motion_fallback
+    )
+
+    # Severity: 1 none, 2 mild, 3 moderate, 4 severe. Missing severity is
+    # treated as no stenosis. Compression side: 1 anterior/left, 2 posterior/
+    # right, 3 bilateral, 4 minor deformation. A missing/disabled side is kept
+    # neutral instead of introducing an artificial directional displacement.
+    stenosis_severity = np.where(np.isfinite(stenosis_raw), stenosis_raw, 1.0)
+    stenosis_severity = np.clip(np.rint(stenosis_severity), 1, 4).astype(int)
+
+    compression_side = np.where(
+        np.isfinite(compression_side_raw), compression_side_raw, 3.0
+    )
+    compression_side = np.clip(np.rint(compression_side), 1, 4).astype(int)
+
+    return SpineProfile(
+        canal_ap_segment_mm=canal_ap,
+        cord_ap_segment_mm=cord_ap,
+        motion_segment_raw=motion_raw,
+        motion_segment_filled=motion_filled,
+        csf_ap_segment_mm=csf_ap,
+        stenosis_severity_segment=stenosis_severity,
+        compression_side_segment=compression_side,
+        maximum_level=(
+            decode_maximum_level(float(row[columns.maximum_stenosis]))
+            if columns.maximum_stenosis is not None
+            else None
+        ),
+        # Do not let categorical stenosis/side data push an imputed, standard-
+        # sized cord from one canal wall to the other. Directional displacement
+        # needs local measured AP support from both canal and cord.
+        compression_geometry_supported_segment=(
+            np.isfinite(canal_ap_raw[:len(SEGMENTS)])
+            & np.isfinite(cord_ap_raw[:len(SEGMENTS)])
+        ),
+    )
+
+
+# =============================================================================
+# 6. Shape-preserving PCHIP canal / CSF / cord geometry
+# =============================================================================
+
+def level_to_inferior_segment_y(level: str) -> float:
+    index = LEVELS.index(level)
+    return float(MEASUREMENT_Y[index])
+
+
+def anterior_csf_fraction_at_segments(profile: SpineProfile) -> np.ndarray:
+    """Return the fraction of total CSF placed anterior to the cord."""
+    fractions = np.full(len(SEGMENTS), 0.50, dtype=float)
+
+    for index, (severity, side) in enumerate(zip(
+        profile.stenosis_severity_segment,
+        profile.compression_side_segment,
+    )):
+        severity = int(severity)
+        side = int(side)
+
+        if not profile.compression_geometry_supported_segment[index]:
+            # The AP geometry at this segment was imputed/fallback-filled. Keep
+            # the cord centered rather than creating a categorical side shift on
+            # top of an unmeasured diameter.
+            fractions[index] = 0.50
+            continue
+
+        if severity <= 1:
+            fractions[index] = 0.50
+            continue
+
+        if side == 4:
+            # Study code 4 denotes only minor deformation, so keep the shift
+            # deliberately subtle.
+            fractions[index] = MINOR_DEFORMATION_ANTERIOR_CSF_FRACTION
+            continue
+
+        if side == 3:
+            # Bilateral compression is symmetric in the sagittal projection.
+            # Its absolute narrowing is already represented by the measured
+            # segmental canal AP diameter.
+            fractions[index] = 0.50
+            continue
+
+        affected_fraction = STENOSIS_AFFECTED_SIDE_CSF_FRACTION[severity]
+        if side == 2:  # posterior/right compression
+            fractions[index] = 1.0 - affected_fraction
+        else:  # anterior/left, including the physiological fallback
+            fractions[index] = affected_fraction
+
+    return fractions
+
+
+def dense_geometry(profile: SpineProfile, points: int) -> DenseGeometry:
+    """Create smooth, shape-preserving PCHIP canal, CSF and cord geometry."""
+    y = np.linspace(-0.60, 5.30, points)
+
+    # Canal and cord AP are measured at segment positions despite their C2...C7
+    # database names. No additional artificial stenosis width reduction is added.
+    canal_ap_mm = pchip_interpolate(
+        y, MEASUREMENT_Y, profile.canal_ap_segment_mm
+    )
+    canal_ap_mm = np.clip(canal_ap_mm, 0.5, None)
+
+    cord_ap_mm = pchip_interpolate(
+        y, MEASUREMENT_Y, profile.cord_ap_segment_mm
+    )
+    cord_ap_mm = np.clip(cord_ap_mm, 0.02, canal_ap_mm)
+    total_csf = np.maximum(
+        (canal_ap_mm - cord_ap_mm) * MM_TO_PLOT,
+        0.0,
+    )
+
+    centerline = np.zeros_like(y)
+    canal_left = centerline - 0.5 * canal_ap_mm * MM_TO_PLOT
+    canal_right = centerline + 0.5 * canal_ap_mm * MM_TO_PLOT
+    cord_width = cord_ap_mm * MM_TO_PLOT
+
+    # Severity and compression side distribute the CSF around the cord.
+    # To keep normal anatomy centered above C2 and below C7, 0.50 is added as
+    # an endpoint control value on both sides of the five stenosis segments.
+    anterior_fraction_nodes = anterior_csf_fraction_at_segments(profile)
+    distribution_y = np.concatenate([[LEVEL_Y[0]], SEGMENT_Y, [MEASUREMENT_Y[-1]]])
+    distribution_values = np.concatenate([
+        [0.50], anterior_fraction_nodes, [0.50]
+    ])
+    anterior_fraction = pchip_interpolate(
+        y, distribution_y, distribution_values
+    )
+    anterior_fraction = np.clip(anterior_fraction, 0.0, 1.0)
+
+    anterior_csf = total_csf * anterior_fraction
+    posterior_csf = total_csf - anterior_csf
+
+    cord_left = canal_left + anterior_csf
+    cord_right = cord_left + cord_width
+    cord_left = np.maximum(cord_left, canal_left)
+    cord_right = np.minimum(cord_right, canal_right)
+
+    # Motion values are segment-based despite their C2...C7 database names.
+    motion = pchip_interpolate(y, SIMULATION_Y, profile.motion_segment_filled)
+
+    return DenseGeometry(
+        y=y,
+        canal_left=canal_left,
+        canal_right=canal_right,
+        cord_left=cord_left,
+        cord_right=cord_right,
+        motion=motion,
+    )
+
+
+# =============================================================================
+# 7. Data-driven anatomy drawing
+# =============================================================================
+
+def x_at(y_value: float, y: np.ndarray, x_values: np.ndarray) -> float:
+    return float(np.interp(y_value, y, x_values))
+
+
+def boundary_polygon(
+    y: np.ndarray,
+    left: np.ndarray,
+    right: np.ndarray,
+) -> np.ndarray:
+    return np.vstack(
+        [
+            np.column_stack([left, y]),
+            np.column_stack([right[::-1], y[::-1]]),
+        ]
+    )
+
+
+def draw_vertebral_body(
+    ax: Axes,
+    geometry: DenseGeometry,
+    y_center: float,
+    compact: bool,
+) -> None:
+    height = 0.72
+    top = y_center + height / 2.0
+    bottom = y_center - height / 2.0
+    base_body_left = -2.22 if not compact else -2.05
+
+    canal_reference = float(np.median(geometry.canal_left))
+    local_shift = (
+        x_at(y_center, geometry.y, geometry.canal_left) - canal_reference
+    ) * 0.55
+    body_left = base_body_left + local_shift
+
+    right_top = (
+        x_at(top, geometry.y, geometry.canal_left)
+        - ANTERIOR_LIGAMENT_GAP
+    )
+    right_mid = (
+        x_at(y_center, geometry.y, geometry.canal_left)
+        - ANTERIOR_LIGAMENT_GAP
+    )
+    right_bottom = (
+        x_at(bottom, geometry.y, geometry.canal_left)
+        - ANTERIOR_LIGAMENT_GAP
+    )
+
+    vertices = [
+        (body_left + 0.08, top),
+        (body_left - 0.04, y_center + 0.16),
+        (body_left + 0.03, bottom),
+        (right_bottom, bottom),
+        (right_mid, y_center),
+        (right_top, top),
+        (body_left + 0.08, top),
+    ]
+    codes = [
+        MplPath.MOVETO,
+        MplPath.CURVE3,
+        MplPath.CURVE3,
+        MplPath.LINETO,
+        MplPath.CURVE3,
+        MplPath.CURVE3,
+        MplPath.CLOSEPOLY,
+    ]
+
+    ax.add_patch(
+        PathPatch(
+            MplPath(vertices, codes),
+            facecolor="#efe7d8",
+            edgecolor="#33383c",
+            linewidth=0.95 if not compact else 0.65,
+            zorder=2,
+        )
+    )
+
+
+def draw_disc(
+    ax: Axes,
+    geometry: DenseGeometry,
+    y_center: float,
+    compact: bool,
+) -> None:
+    height = 0.15
+    top = y_center + height / 2.0
+    bottom = y_center - height / 2.0
+
+    base_body_left = -2.19 if not compact else -2.02
+    canal_reference = float(np.median(geometry.canal_left))
+    local_shift = (
+        x_at(y_center, geometry.y, geometry.canal_left) - canal_reference
+    ) * 0.55
+    body_left = base_body_left + local_shift
+
+    right_top = (
+        x_at(top, geometry.y, geometry.canal_left)
+        - ANTERIOR_LIGAMENT_GAP
+    )
+    right_mid = (
+        x_at(y_center, geometry.y, geometry.canal_left)
+        - ANTERIOR_LIGAMENT_GAP
+    )
+    right_bottom = (
+        x_at(bottom, geometry.y, geometry.canal_left)
+        - ANTERIOR_LIGAMENT_GAP
+    )
+
+    vertices = [
+        (body_left, top),
+        (right_top, top),
+        (right_mid + 0.010, y_center),
+        (right_bottom, bottom),
+        (body_left + 0.01, bottom),
+        (body_left, top),
+    ]
+    codes = [
+        MplPath.MOVETO,
+        MplPath.LINETO,
+        MplPath.CURVE3,
+        MplPath.CURVE3,
+        MplPath.LINETO,
+        MplPath.CLOSEPOLY,
+    ]
+
+    ax.add_patch(
+        PathPatch(
+            MplPath(vertices, codes),
+            facecolor="#aec8d5",
+            edgecolor="#3d454a",
+            linewidth=0.74 if not compact else 0.48,
+            zorder=2,
+        )
+    )
+
+
+def draw_posterior_element(
+    ax: Axes,
+    geometry: DenseGeometry,
+    y_center: float,
+    compact: bool,
+) -> None:
+    canal_x = (
+        x_at(
+            y_center,
+            geometry.y,
+            geometry.canal_right,
+        )
+        + POSTERIOR_LIGAMENT_GAP
+    )
+
+    process_length = 0.82 if not compact else 0.66
+
+    canal_reference = float(np.median(geometry.canal_right))
+    local_curve = np.clip(
+        (canal_x - canal_reference) * 0.12,
+        -0.025,
+        0.025,
+    )
+    outer_x = canal_x + process_length + local_curve
+
+    posterior_tip_y = y_center - 0.38
+
+    anterior_top_y = y_center + 0.30
+    anterior_mid_y = y_center + 0.06
+    anterior_bottom_y = y_center - 0.24
+
+    vertices = [
+        (canal_x + 0.015, anterior_top_y),
+        (canal_x + 0.13, anterior_top_y + 0.01),
+        (canal_x + 0.29, y_center + 0.25),
+        (canal_x + 0.39, y_center + 0.16),
+        (canal_x + 0.50, y_center + 0.10),
+        (outer_x - 0.13, y_center + 0.04),
+        (outer_x - 0.035, posterior_tip_y + 0.11),
+        (outer_x + 0.025, posterior_tip_y + 0.045),
+        (outer_x + 0.005, posterior_tip_y - 0.025),
+        (outer_x - 0.085, posterior_tip_y - 0.055),
+        (outer_x - 0.20, posterior_tip_y - 0.065),
+        (canal_x + 0.40, anterior_bottom_y - 0.045),
+        (canal_x + 0.22, anterior_bottom_y),
+        (canal_x + 0.10, anterior_bottom_y + 0.01),
+        (canal_x + 0.020, y_center - 0.13),
+        (canal_x + 0.015, anterior_mid_y),
+        (canal_x + 0.015, y_center + 0.16),
+        (canal_x + 0.015, y_center + 0.25),
+        (canal_x + 0.015, anterior_top_y),
+        (canal_x + 0.015, anterior_top_y),
+    ]
+
+    codes = [
+        MplPath.MOVETO,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CURVE4,
+        MplPath.CLOSEPOLY,
+    ]
+
+    ax.add_patch(
+        PathPatch(
+            MplPath(vertices, codes),
+            facecolor="#efe7d8",
+            edgecolor="#33383c",
+            linewidth=0.92 if not compact else 0.62,
+            capstyle="round",
+            joinstyle="round",
+            antialiased=True,
+            zorder=2,
+        )
+    )
+
+
+def draw_bony_anatomy(
+    ax: Axes,
+    geometry: DenseGeometry,
+    compact: bool,
+) -> None:
+    for y_center in LEVEL_Y:
+        draw_vertebral_body(ax, geometry, y_center, compact)
+        draw_posterior_element(ax, geometry, y_center, compact)
+
+    for y_center in MEASUREMENT_Y:
+        draw_disc(ax, geometry, y_center, compact)
+
+
+def draw_canal_csf_and_cord(
+    ax: Axes,
+    geometry: DenseGeometry,
+    motion_norm: mpl.colors.Normalize,
+    cmap: mpl.colors.Colormap,
+    compact: bool,
+) -> None:
+    canal_points = boundary_polygon(
+        geometry.y,
+        geometry.canal_left,
+        geometry.canal_right,
+    )
+    cord_points = boundary_polygon(
+        geometry.y,
+        geometry.cord_left,
+        geometry.cord_right,
+    )
+
+    ax.add_patch(
+        Polygon(
+            canal_points,
+            closed=True,
+            facecolor="#d8f2f7",
+            edgecolor="#33444b",
+            linewidth=1.20 if not compact else 0.78,
+            zorder=3,
+            joinstyle="round",
+        )
+    )
+
+    raster_columns = (
+        MOTION_RASTER_COLUMNS_COMPACT
+        if compact
+        else MOTION_RASTER_COLUMNS_FULL
+    )
+    raster = np.broadcast_to(
+        geometry.motion[:, None],
+        (geometry.motion.size, raster_columns),
+    )
+
+    image = ax.imshow(
+        raster,
+        origin="lower",
+        extent=[
+            float(np.min(geometry.cord_left)),
+            float(np.max(geometry.cord_right)),
+            geometry.y.min(),
+            geometry.y.max(),
+        ],
+        cmap=cmap,
+        norm=motion_norm,
+        interpolation="bilinear",
+        aspect="auto",
+        zorder=4,
+        rasterized=True,
+    )
+
+    clip_patch = Polygon(cord_points, closed=True, transform=ax.transData)
+    image.set_clip_path(clip_patch)
+
+    ax.add_patch(
+        Polygon(
+            cord_points,
+            closed=True,
+            facecolor="none",
+            edgecolor="#263239",
+            linewidth=0.95 if not compact else 0.62,
+            zorder=5,
+            joinstyle="round",
+        )
+    )
+
+
+def draw_spinal_cord_only(ax, geometry, motion_norm, cmap, compact):
+    """Draw only the motion-coloured spinal cord; no bone, discs, canal or CSF."""
+    cord_points = boundary_polygon(geometry.y, geometry.cord_left, geometry.cord_right)
+    raster_columns = MOTION_RASTER_COLUMNS_COMPACT if compact else MOTION_RASTER_COLUMNS_FULL
+    raster = np.broadcast_to(geometry.motion[:, None], (geometry.motion.size, raster_columns))
+    image = ax.imshow(
+        raster, origin="lower",
+        extent=[float(np.min(geometry.cord_left)), float(np.max(geometry.cord_right)), geometry.y.min(), geometry.y.max()],
+        cmap=cmap, norm=motion_norm, interpolation="bilinear", aspect="auto", zorder=4, rasterized=True,
+    )
+    clip_patch = Polygon(cord_points, closed=True, transform=ax.transData)
+    image.set_clip_path(clip_patch)
+    ax.add_patch(Polygon(cord_points, closed=True, facecolor="none", edgecolor="#263239",
+                         linewidth=0.95 if not compact else 0.62, zorder=5, joinstyle="round"))
+
+
+# =============================================================================
+# 8. Labels and legends
+# =============================================================================
+
+def draw_annotations(
+    ax: Axes,
+    profile: SpineProfile,
+    geometry: DenseGeometry,
+    compact: bool,
+    show_numbers: bool,
+    canal_only: bool = False,
+) -> None:
+    level_x = (-0.92 if canal_only else (-2.52 if not compact else -2.32))
+    info_x = 1.20 if canal_only else 1.58
+
+    for level, y_center in zip(LEVELS, LEVEL_Y):
+        ax.text(
+            level_x, y_center, level, ha="right", va="center",
+            fontsize=ANNOTATION_FONT_SIZE, fontweight="bold",
+        )
+
+    if show_numbers and not compact:
+        simulation_by_y = {
+            float(y): float(v)
+            for y, v in zip(SIMULATION_Y, profile.motion_segment_raw)
+        }
+        for index, (segment, y_center) in enumerate(
+            zip(MEASUREMENT_SEGMENTS, MEASUREMENT_Y)
+        ):
+            sim = simulation_by_y.get(float(y_center), np.nan)
+            sim_text = f"{sim:.2f}" if np.isfinite(sim) else "-"
+            ax.text(
+                info_x, y_center,
+                f"{segment}   Sim {sim_text}   |   "
+                f"Canal {profile.canal_ap_segment_mm[index]:.2f} mm   |   "
+                f"Cord {profile.cord_ap_segment_mm[index]:.2f} mm   |   "
+                f"CSF {profile.csf_ap_segment_mm[index]:.2f} mm",
+                ha="left", va="center", fontsize=ANNOTATION_FONT_SIZE,
+            )
+
+    if profile.maximum_level is not None:
+        marker_y = level_to_inferior_segment_y(profile.maximum_level)
+        marker_x = x_at(marker_y, geometry.y, geometry.canal_right) + (
+            0.045 if canal_only else (0.075 if not compact else 0.040)
+        )
+        ax.scatter(
+            [marker_x], [marker_y], marker="o",
+            s=42 if not compact else 15, color="#a51f1f",
+            edgecolor="white", linewidth=0.45, zorder=9,
+        )
+
+
+def draw_legend(ax: Axes, include_maximum_stenosis: bool = True) -> None:
+    handles = [
+        Patch(facecolor="#efe7d8", edgecolor="#33383c", label="Bone"),
+        Patch(facecolor="#aec8d5", edgecolor="#3d454a", label="Disc"),
+        Patch(facecolor="#d8f2f7", edgecolor="#33444b", label="CSF / canal"),
+        Patch(facecolor="#5cc8ff", edgecolor="#263239", label="Cord / motion"),
+    ]
+    if include_maximum_stenosis:
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="none",
+                color="#a51f1f",
+                markersize=5,
+                label="Maximum stenosis",
+            )
+        )
+
+    ax.legend(
+        handles=handles,
+        loc="lower center",
+        bbox_to_anchor=(0.50, -0.080),
+        ncol=3,
+        frameon=False,
+        fontsize=ANNOTATION_FONT_SIZE,
+        handlelength=1.35,
+        columnspacing=0.85,
+    )
+
+
+def add_method_box(fig: Figure) -> None:
+    text = (
+        "Missing anatomy is first filled from adjacent measurements. Visible "
+        "AP, CSF and motion profiles are connected with shape-preserving PCHIP "
+        "interpolation. Segmental canal AP defines the narrowing; stenosis "
+        "severity and compression side determine how the available CSF is "
+        "distributed around the cord."
+    )
+    fig.text(
+        0.50,
+        0.015,
+        text,
+        ha="center",
+        va="bottom",
+        fontsize=ANNOTATION_FONT_SIZE,
+        wrap=True,
+        bbox={
+            "boxstyle": "round,pad=0.45",
+            "facecolor": "white",
+            "edgecolor": "#888888",
+            "linewidth": 0.7,
+        },
+    )
+
+
+# =============================================================================
+# 9. Plotting
+# =============================================================================
+
+def plot_spine(
+    profile: SpineProfile,
+    geometry: DenseGeometry,
+    motion_norm: mpl.colors.Normalize,
+    patient_label: str,
+    ax: Optional[Axes] = None,
+    compact: bool = False,
+    add_colorbar: bool = True,
+    include_method_box: bool = False,
+    show_numbers: bool = True,
+    show_legend: bool = True,
+    title_prefix: str = "",
+    canal_only: bool = False,
+    cord_only: bool = False,
+) -> tuple[Figure, Axes]:
+    if ax is None:
+        if show_numbers:
+            figsize = (11.8, 8.7)
+        else:
+            figsize = (8.6, 8.7)
+        if include_method_box:
+            figsize = (figsize[0], figsize[1] + 0.8)
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    cmap = mpl.colormaps[MOTION_CMAP]
+
+    if cord_only:
+        draw_spinal_cord_only(ax, geometry, motion_norm, cmap, compact)
+    else:
+        if not canal_only:
+            draw_bony_anatomy(ax, geometry, compact=compact)
+        draw_canal_csf_and_cord(ax, geometry, motion_norm, cmap, compact=compact)
+    draw_annotations(
+        ax, profile, geometry, compact=compact,
+        show_numbers=show_numbers, canal_only=(canal_only or cord_only),
+    )
+
+    title_text = title_prefix if title_prefix else (
+        f"Patient {patient_label}" if not compact else f"ID {patient_label}"
+    )
+    ax.set_title(
+        title_text,
+        fontsize=(COMPACT_TITLE_FONT_SIZE if compact else TITLE_FONT_SIZE),
+        pad=8 if not compact else 2,
+    )
+
+    if canal_only or cord_only:
+        if compact:
+            ax.set_xlim(-1.00, 1.02)
+        else:
+            ax.set_xlim(-1.05, 4.20 if show_numbers else 1.05)
+    elif compact:
+        ax.set_xlim(-2.32, 1.28)
+    else:
+        # Extra room prevents population annotation text from touching the
+        # colorbar.
+        ax.set_xlim(-2.62, 5.05 if show_numbers else 1.70)
+
+    ax.set_ylim(-0.64 if not compact else -0.62, 5.34)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    if add_colorbar:
+        scalar_mappable = mpl.cm.ScalarMappable(norm=motion_norm, cmap=cmap)
+        scalar_mappable.set_array([])
+        if ax is not None and not compact and show_numbers:
+            # Reserve a dedicated right margin for the standalone numerical
+            # plots. This keeps the segment text clearly separated from the bar.
+            fig.subplots_adjust(right=0.82)
+            colorbar_axis = fig.add_axes([0.88, 0.18, 0.018, 0.64])
+            colorbar = fig.colorbar(scalar_mappable, cax=colorbar_axis)
+        else:
+            colorbar = fig.colorbar(
+                scalar_mappable, ax=ax, fraction=0.028,
+                pad=0.020,
+            )
+        colorbar.ax.tick_params(labelsize=ANNOTATION_FONT_SIZE)
+        colorbar.set_label(
+            SIMULATION_COLORBAR_LABEL, fontsize=ANNOTATION_FONT_SIZE
+        )
+
+    if not compact and show_legend:
+        draw_legend(
+            ax,
+            include_maximum_stenosis=(profile.maximum_level is not None),
+        )
+
+    if include_method_box:
+        add_method_box(fig)
+        fig.subplots_adjust(bottom=0.13)
+
+    return fig, ax
+
+
+# =============================================================================
+# 10. Population average and output workflow
+# =============================================================================
+
+def population_average_row(
+    data: pd.DataFrame,
+    columns: ColumnMap,
+) -> pd.Series:
+    result = pd.Series(index=columns.all_columns, dtype=float)
+
+    continuous = [
+        *columns.canal_ap.values(),
+        *columns.cord_ap.values(),
+        *columns.motion.values(),
+    ]
+    result[continuous] = data[continuous].mean(axis=0, skipna=True)
+
+    categorical_columns = [
+        *columns.stenosis.values(),
+        *columns.compression_side.values(),
+        *([columns.maximum_stenosis] if columns.maximum_stenosis else []),
+    ]
+    for column in categorical_columns:
+        valid = data[column].dropna().round().astype(int)
+        result[column] = (
+            float(valid.mode().iloc[0])
+            if len(valid)
+            else np.nan
+        )
+
+    return result
+
+
+def patient_label_for_row(
+    data: pd.DataFrame,
+    row_index: int,
+) -> str:
+    value = data.iloc[row_index][PATIENT_ID_COLUMN]
+    return format_patient_id(value)
+
+
+def safe_filename(text: str) -> str:
+    return "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in text
+    )
+
+
+def save_figure(fig: Figure, filename: str) -> None:
+    fig.savefig(
+        OUTPUT_DIRECTORY / filename,
+        dpi=SAVE_DPI,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+
+
+def save_figure(fig: Figure, filename: str) -> None:
+    # Alle Plots weiterhin speichern
+    fig.savefig(
+        OUTPUT_DIRECTORY / filename,
+        dpi=SAVE_DPI,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+
+    # Nur Multi-Canal-Plots für die Bildschirm-Anzeige offen lassen
+    is_multi_canal = (
+        filename == "03_multi_patient_spinal_canal_only.png"
+    )
+
+    if not SHOW_FIGURES or not is_multi_canal:
+        plt.close(fig)
+
+
+
+
+def geometry_cache_get(
+    cache: dict[tuple[int, int], DenseGeometry],
+    profile_index: int,
+    profile: SpineProfile,
+    points: int,
+) -> DenseGeometry:
+    key = (profile_index, points)
+    geometry = cache.get(key)
+
+    if geometry is None:
+        geometry = dense_geometry(profile, points)
+        cache[key] = geometry
+
+    return geometry
+
+
+def print_terminal_audit(
+    raw_data: pd.DataFrame,
+    filtered_data: pd.DataFrame,
+    columns: ColumnMap,
+    exclusion_report: pd.DataFrame,
+    duplicate_report: pd.DataFrame,
+) -> None:
+    motion_cols = list(COHORT_REQUIRED_MOTION_COLUMNS)
+    simulation_cols = columns.motion_required_columns
+    anatomy_cols = columns.optional_anatomy_columns
+
+    print("\n================ DATA / MOTION FILTER CHECK ================")
+    print(f"Rows loaded from database: {len(raw_data)}")
+    print(f"Required cohort motion columns: {len(motion_cols)}")
+
+    print("\nCohort-defining motion columns:")
+    for column in motion_cols:
+        print(f"  {column}")
+
+    print("\nActive simulation columns (not used for cohort exclusion):")
+    for column in simulation_cols:
+        print(f"  {column}")
+
+    print("\nValid values per required motion column:")
+    for column in motion_cols:
+        print(f"  {column}: {raw_data[column].notna().sum()} / {len(raw_data)}")
+
+    complete_motion = raw_data[motion_cols].notna().all(axis=1)
+    print(
+        f"\nPatients/rows with ALL {len(motion_cols)} required motion values: "
+        f"{int(complete_motion.sum())} / {len(raw_data)}"
+    )
+
+    print(
+        f"Rows excluded for incomplete simulation data: "
+        f"{len(exclusion_report)}"
+    )
+
+    duplicate_excluded = 0
+    if not duplicate_report.empty and "duplicate_action" in duplicate_report:
+        duplicate_excluded = int(
+            (
+                duplicate_report["duplicate_action"]
+                == "excluded_duplicate_patient_id"
+            ).sum()
+        )
+
+    print(
+        f"Duplicate patient-ID rows excluded: {duplicate_excluded}"
+    )
+    print(
+        f"Unique patients used for plots/statistics: {len(filtered_data)}"
+    )
+
+    print("\nOptional anatomy availability after motion filtering:")
+    motion_filtered = raw_data.loc[complete_motion]
+    for column in anatomy_cols:
+        print(
+            f"  {column}: "
+            f"{motion_filtered[column].notna().sum()} / {len(motion_filtered)}"
+        )
+
+    preview_columns = [PATIENT_ID_COLUMN] + motion_cols
+    preview_n = min(TERMINAL_PREVIEW_ROWS, len(raw_data))
+    print(f"\nFirst {preview_n} rows - patient ID and motion values:")
+    print(
+        raw_data[preview_columns]
+        .head(preview_n)
+        .to_string(index=False)
+    )
+    print("============================================================\n")
+
+
+
+def apply_data_condition(
+    series: pd.Series,
+    operator: str,
+    value: object,
+) -> pd.Series:
+    """Evaluate one configured DATA subgroup condition."""
+    if operator == "==":
+        return series == value
+    if operator == "!=":
+        return series != value
+    if operator == ">":
+        return series > value
+    if operator == ">=":
+        return series >= value
+    if operator == "<":
+        return series < value
+    if operator == "<=":
+        return series <= value
+    if operator == "in":
+        return series.isin(value)
+    if operator == "not in":
+        return ~series.isin(value)
+
+    raise ValueError(f"Unsupported DATA_GROUPS operator: {operator!r}")
+
+
+def select_data_group(
+    data: pd.DataFrame,
+    group: dict[str, object],
+) -> pd.DataFrame:
+    """
+    Select a subgroup directly from database variables.
+
+    Multiple conditions inside one group are combined with AND.
+    """
+    conditions = group.get("conditions", ())
+    if not conditions:
+        raise ValueError(
+            f"DATA group {group.get('name', '<unnamed>')!r} has no conditions."
+        )
+
+    mask = pd.Series(True, index=data.index)
+
+    for column_name, operator, value in conditions:
+        if column_name not in data.columns:
+            raise KeyError(
+                f"DATA_GROUPS column {column_name!r} does not exist in the database."
+            )
+        mask &= apply_data_condition(
+            data[column_name],
+            str(operator),
+            value,
+        ).fillna(False)
+
+    return data.loc[mask].copy().reset_index(drop=True)
+
+
+def plot_population_average_comparison(
+    averages: list[tuple[str, SpineProfile, DenseGeometry]],
+    motion_norm: mpl.colors.Normalize,
+) -> Figure:
+    """Plot configured DATA-group population averages side by side."""
+    if not averages:
+        raise ValueError("No population averages are available for comparison.")
+
+    count = len(averages)
+    fig = plt.figure(
+        figsize=(5.2 * count + 0.75, 8.7),
+        constrained_layout=True,
+    )
+    grid = fig.add_gridspec(
+        1,
+        count + 1,
+        width_ratios=[1.0] * count + [0.045],
+        wspace=0.08,
+    )
+
+    for index, (label, profile, geometry) in enumerate(averages):
+        ax = fig.add_subplot(grid[0, index])
+        plot_spine(
+            profile,
+            geometry,
+            motion_norm,
+            patient_label=label,
+            ax=ax,
+            compact=False,
+            add_colorbar=False,
+            include_method_box=False,
+            show_numbers=False,
+            show_legend=True,
+            title_prefix=PLOT_TITLES["population_average"].format(
+                simulation=SIMULATION_TITLE, group=label
+            ),
+        )
+
+    colorbar_axis = fig.add_subplot(grid[0, -1])
+    scalar_mappable = mpl.cm.ScalarMappable(
+        norm=motion_norm,
+        cmap=mpl.colormaps[MOTION_CMAP],
+    )
+    scalar_mappable.set_array([])
+    colorbar = fig.colorbar(scalar_mappable, cax=colorbar_axis)
+    colorbar.ax.tick_params(labelsize=ANNOTATION_FONT_SIZE)
+    colorbar.set_label(
+        SIMULATION_COLORBAR_LABEL,
+        fontsize=ANNOTATION_FONT_SIZE,
+    )
+
+    fig.suptitle(
+        PLOT_TITLES["population_comparison"].format(simulation=SIMULATION_TITLE),
+        fontsize=TITLE_FONT_SIZE,
+    )
+    return fig
+
+
+
+def plot_simulation_mode_population_comparison(
+    group_label: str,
+    mode_averages: list[
+        tuple[
+            str, str, SpineProfile, DenseGeometry,
+            mpl.colors.Normalize, str
+        ]
+    ],
+) -> Figure:
+
+    if not mode_averages:
+        raise ValueError(
+            "No simulation-mode population averages are available."
+        )
+
+    count = len(mode_averages)
+
+    # Automatically calculate rows and columns
+    ncols = min(COMPARISON_MAX_COLUMNS, count)
+    nrows = (count + ncols - 1) // ncols
+
+    # Figure size depends on number of rows and columns
+    fig = plt.figure(
+        figsize=(
+            COMPARISON_PANEL_WIDTH * ncols,
+            COMPARISON_PANEL_HEIGHT * nrows + 0.9,
+        ),
+        constrained_layout=False,
+    )
+
+    grid = fig.add_gridspec(
+        nrows,
+        ncols,
+        wspace=0.30,
+        hspace=0.35,
+    )
+
+    for index, (
+        mode_name,
+        mode_title,
+        profile,
+        geometry,
+        mode_norm,
+        colorbar_label,
+    ) in enumerate(mode_averages):
+
+        activate_simulation_mode(mode_name)
+
+        # Determine position in grid
+        row, col = divmod(index, ncols)
+
+        ax = fig.add_subplot(grid[row, col])
+
+        plot_spine(
+            profile,
+            geometry,
+            mode_norm,
+            patient_label=group_label,
+            ax=ax,
+            compact=False,
+            add_colorbar=False,
+            include_method_box=False,
+            show_numbers=False,
+            show_legend=False,
+            title_prefix=mode_title,
+        )
+
+        # Individual colorbar for each simulation mode
+        scalar_mappable = mpl.cm.ScalarMappable(
+            norm=mode_norm,
+            cmap=mpl.colormaps[MOTION_CMAP],
+        )
+
+        scalar_mappable.set_array([])
+
+        colorbar = fig.colorbar(
+            scalar_mappable,
+            ax=ax,
+            fraction=0.046,
+            pad=0.025,
+            shrink=0.85,
+        )
+
+        colorbar.ax.tick_params(
+            labelsize=ANNOTATION_FONT_SIZE
+        )
+
+        colorbar.set_label(
+            colorbar_label,
+            fontsize=ANNOTATION_FONT_SIZE,
+        )
+
+    # One shared legend for the entire figure
+    handles = [
+        Patch(
+            facecolor="#efe7d8",
+            edgecolor="#33383c",
+            label="Bone",
+        ),
+        Patch(
+            facecolor="#aec8d5",
+            edgecolor="#3d454a",
+            label="Disc",
+        ),
+        Patch(
+            facecolor="#d8f2f7",
+            edgecolor="#33444b",
+            label="CSF / canal",
+        ),
+        Patch(
+            facecolor="#5cc8ff",
+            edgecolor="#263239",
+            label="Cord / motion",
+        ),
+    ]
+
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.015),
+        ncol=4,
+        frameon=False,
+        fontsize=ANNOTATION_FONT_SIZE,
+        handlelength=1.5,
+        columnspacing=2.0,
+    )
+
+    # Main figure title
+    fig.suptitle(
+        f"{COMPARISON_TITLE} | {group_label}",
+        fontsize=TITLE_FONT_SIZE,
+        y=0.98,
+    )
+
+    # Reserve space for title and shared legend
+    fig.subplots_adjust(
+        left=0.05,
+        right=0.95,
+        top=1 - 0.55 / fig.get_figheight(),
+        bottom=0.65 / fig.get_figheight(),
+    )
+
+    return fig
+
+def run_standard_plots_for_data_group(
+    data: pd.DataFrame,
+    columns: ColumnMap,
+    motion_norm: mpl.colors.Normalize,
+    global_motion_fallback: float,
+    group_output_directory: Path,
+    group_label: str,
+) -> tuple[SpineProfile, DenseGeometry]:
+    """
+    Run the original plot sequence unchanged in content for one DATA subgroup.
+    """
+    global OUTPUT_DIRECTORY
+    previous_output_directory = OUTPUT_DIRECTORY
+    OUTPUT_DIRECTORY = group_output_directory
+    OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+    try:
+        profiles = [
+            build_profile(
+                data.iloc[index],
+                columns,
+                global_motion_fallback,
+            )
+            for index in range(len(data))
+        ]
+
+        export_data_audit(data, columns, profiles)
+        geometry_cache: dict[tuple[int, int], DenseGeometry] = {}
+
+        if not 0 <= PATIENT_INDEX < len(data):
+            raise IndexError(
+                f"PATIENT_INDEX={PATIENT_INDEX} is invalid for "
+                f"{len(data)} patients in this DATA group."
+            )
+
+        first_profile = profiles[PATIENT_INDEX]
+        first_geometry = geometry_cache_get(
+            geometry_cache,
+            PATIENT_INDEX,
+            first_profile,
+            GEOMETRY_POINTS_FULL,
+        )
+        first_label = patient_label_for_row(data, PATIENT_INDEX)
+
+        fig, _ = plot_spine(
+            first_profile,
+            first_geometry,
+            motion_norm,
+            patient_label=first_label,
+            compact=False,
+            add_colorbar=True,
+            include_method_box=FIRST_PLOT_METHOD_BOX,
+            show_numbers=FIRST_PLOT_SHOW_NUMBERS,
+            show_legend=FIRST_PLOT_SHOW_LEGEND,
+            title_prefix=PLOT_TITLES["single_patient"].format(
+                simulation=SIMULATION_TITLE,
+                group=group_label,
+                patient=first_label,
+            ),
+        )
+        save_figure(fig, "01_single_patient_full_cervical_spine.png")
+        
+        if SAVE_ALL_INDIVIDUAL_PATIENTS:
+            individual_indices = range(len(data))
+        else:
+            individual_indices = sorted(set(INDIVIDUAL_PATIENT_INDICES))
+
+        for row_index in individual_indices:
+            if not 0 <= row_index < len(data):
+                print(f"Skipping invalid filtered patient index: {row_index}")
+                continue
+
+            profile = profiles[row_index]
+            geometry = geometry_cache_get(
+                geometry_cache, row_index, profile, GEOMETRY_POINTS_FULL
+            )
+            label = patient_label_for_row(data, row_index)
+
+            fig, _ = plot_spine(
+                profile, geometry, motion_norm,
+                patient_label=label,
+                compact=False, add_colorbar=True,
+                include_method_box=False,
+                show_numbers=True, show_legend=True,
+                title_prefix=PLOT_TITLES["single_patient"].format(
+                    simulation=SIMULATION_TITLE, group=group_label, patient=first_label
+                ),
+            )
+            save_figure(
+                fig,
+                f"cervical_spine_patient_{safe_filename(label)}.png",
+            )
+            
+        stop = min(MULTI_PATIENT_START + MULTI_PATIENT_COUNT, len(data))
+        selected_indices = list(range(MULTI_PATIENT_START, stop))
+
+        if selected_indices:
+            rows = int(np.ceil(len(selected_indices) / MULTI_PATIENT_COLUMNS))
+
+            fig = plt.figure(
+                figsize=(
+                    3.15 * MULTI_PATIENT_COLUMNS + 0.55,
+                    4.55 * rows,
+                ),
+                constrained_layout=True,
+            )
+            grid = fig.add_gridspec(
+                rows,
+                MULTI_PATIENT_COLUMNS + 1,
+                width_ratios=[1.0] * MULTI_PATIENT_COLUMNS + [0.045],
+                wspace=0.035,
+                hspace=0.055,
+            )
+
+            for plot_position in range(rows * MULTI_PATIENT_COLUMNS):
+                row_pos = plot_position // MULTI_PATIENT_COLUMNS
+                col_pos = plot_position % MULTI_PATIENT_COLUMNS
+                ax = fig.add_subplot(grid[row_pos, col_pos])
+
+                if plot_position >= len(selected_indices):
+                    ax.axis("off")
+                    continue
+
+                row_index = selected_indices[plot_position]
+                profile = profiles[row_index]
+                geometry = geometry_cache_get(
+                    geometry_cache,
+                    row_index,
+                    profile,
+                    GEOMETRY_POINTS_COMPACT,
+                )
+                label = patient_label_for_row(data, row_index)
+
+                plot_spine(
+                    profile, geometry, motion_norm,
+                    patient_label=label, ax=ax,
+                    compact=True, add_colorbar=False,
+                    include_method_box=False,
+                    show_numbers=False, show_legend=False,
+                    title_prefix=PLOT_TITLES["multi_patient"].format(
+                        patient=label
+                    ),
+                )
+            
+            fig.suptitle(
+                PLOT_TITLES["multi_full"].format(
+                    simulation=SIMULATION_TITLE,
+                    group=group_label,
+                ),
+                fontsize=TITLE_FONT_SIZE,
+            )
+
+            colorbar_axis = fig.add_subplot(grid[:, -1])
+            scalar_mappable = mpl.cm.ScalarMappable(
+                norm=motion_norm,
+                cmap=mpl.colormaps[MOTION_CMAP],
+            )
+            scalar_mappable.set_array([])
+            colorbar = fig.colorbar(scalar_mappable, cax=colorbar_axis)
+            colorbar.ax.tick_params(labelsize=ANNOTATION_FONT_SIZE)
+            colorbar.set_label(
+                SIMULATION_COLORBAR_LABEL,
+                fontsize=ANNOTATION_FONT_SIZE,
+            )
+            save_figure(fig, "02_multi_patient_full_cervical_spine.png")
+            
+            fig = plt.figure(
+                figsize=(1.85 * MULTI_PATIENT_COLUMNS + 0.55, 4.15 * rows),
+                constrained_layout=True,
+            )
+            grid = fig.add_gridspec(
+                rows,
+                MULTI_PATIENT_COLUMNS + 1,
+                width_ratios=[1.0] * MULTI_PATIENT_COLUMNS + [0.055],
+                wspace=0.025,
+                hspace=0.045,
+            )
+
+            for plot_position in range(rows * MULTI_PATIENT_COLUMNS):
+                row_pos = plot_position // MULTI_PATIENT_COLUMNS
+                col_pos = plot_position % MULTI_PATIENT_COLUMNS
+                ax = fig.add_subplot(grid[row_pos, col_pos])
+
+                if plot_position >= len(selected_indices):
+                    ax.axis("off")
+                    continue
+
+                row_index = selected_indices[plot_position]
+                profile = profiles[row_index]
+                geometry = geometry_cache_get(
+                    geometry_cache,
+                    row_index,
+                    profile,
+                    GEOMETRY_POINTS_COMPACT,
+                )
+                label = patient_label_for_row(data, row_index)
+
+                plot_spine(
+                    profile, geometry, motion_norm,
+                    patient_label=label, ax=ax,
+                    compact=True, add_colorbar=False,
+                    include_method_box=False,
+                    show_numbers=False, show_legend=False,
+                    canal_only=True,
+                    title_prefix=PLOT_TITLES["multi_patient"].format(
+                        patient=label
+                    ),
+                )
+            fig.suptitle(
+                PLOT_TITLES["multi_canal"].format(
+                    simulation=SIMULATION_TITLE,
+                    group=group_label,
+                ),
+                fontsize=TITLE_FONT_SIZE,
+            )
+
+            colorbar_axis = fig.add_subplot(grid[:, -1])
+            scalar_mappable = mpl.cm.ScalarMappable(
+                norm=motion_norm,
+                cmap=mpl.colormaps[MOTION_CMAP],
+            )
+            scalar_mappable.set_array([])
+            colorbar = fig.colorbar(scalar_mappable, cax=colorbar_axis)
+            colorbar.ax.tick_params(labelsize=ANNOTATION_FONT_SIZE)
+            colorbar.set_label(
+                SIMULATION_COLORBAR_LABEL,
+                fontsize=ANNOTATION_FONT_SIZE,
+            )
+            save_figure(fig, "03_multi_patient_spinal_canal_only.png")
+            
+            fig = plt.figure(
+                figsize=(1.45 * MULTI_PATIENT_COLUMNS + 0.55, 4.15 * rows),
+                constrained_layout=True,
+            )
+            grid = fig.add_gridspec(
+                rows, MULTI_PATIENT_COLUMNS + 1,
+                width_ratios=[1.0] * MULTI_PATIENT_COLUMNS + [0.055],
+                wspace=0.025, hspace=0.045,
+            )
+            for plot_position in range(rows * MULTI_PATIENT_COLUMNS):
+                row_pos = plot_position // MULTI_PATIENT_COLUMNS
+                col_pos = plot_position % MULTI_PATIENT_COLUMNS
+                ax = fig.add_subplot(grid[row_pos, col_pos])
+                if plot_position >= len(selected_indices):
+                    ax.axis("off")
+                    continue
+                row_index = selected_indices[plot_position]
+                profile = profiles[row_index]
+                geometry = geometry_cache_get(geometry_cache, row_index, profile, GEOMETRY_POINTS_COMPACT)
+                label = patient_label_for_row(data, row_index)
+                plot_spine(
+                    profile, geometry, motion_norm, patient_label=label, ax=ax,
+                    compact=True, add_colorbar=False, include_method_box=False,
+                    show_numbers=False, show_legend=False, cord_only=True,
+                    title_prefix=PLOT_TITLES["multi_patient"].format(
+                        patient=label
+                    ),
+                )
+            
+            fig.suptitle(
+                PLOT_TITLES["multi_cord"].format(
+                    simulation=SIMULATION_TITLE,
+                    group=group_label,
+                ),
+                fontsize=TITLE_FONT_SIZE,
+            )
+
+            colorbar_axis = fig.add_subplot(grid[:, -1])
+            scalar_mappable = mpl.cm.ScalarMappable(norm=motion_norm, cmap=mpl.colormaps[MOTION_CMAP])
+            scalar_mappable.set_array([])
+            colorbar = fig.colorbar(scalar_mappable, cax=colorbar_axis)
+            colorbar.ax.tick_params(labelsize=ANNOTATION_FONT_SIZE)
+            colorbar.set_label(SIMULATION_COLORBAR_LABEL, fontsize=ANNOTATION_FONT_SIZE)
+            save_figure(fig, "04_multi_patient_spinal_cord_only.png")
+            
+        average_row = population_average_row(data, columns)
+        average_profile = build_profile(
+            average_row,
+            columns,
+            global_motion_fallback,
+        )
+        average_geometry = dense_geometry(
+            average_profile,
+            GEOMETRY_POINTS_FULL,
+        )
+
+        fig, _ = plot_spine(
+            average_profile,
+            average_geometry,
+            motion_norm,
+            patient_label="population average",
+            compact=False,
+            add_colorbar=True,
+            include_method_box=False,
+            show_numbers=True,
+            show_legend=True,
+            title_prefix=PLOT_TITLES["population_average"].format(
+                simulation=SIMULATION_TITLE,
+                group=group_label
+            ),
+        )
+        save_figure(fig, "05_population_average_full_cervical_spine.png")
+        
+        average_row.to_csv(
+            OUTPUT_DIRECTORY / "population_average_values.csv",
+            header=["mean_or_mode"],
+        )
+
+        return average_profile, average_geometry
+    finally:
+        OUTPUT_DIRECTORY = previous_output_directory
+
+
+
+
+def run_one_simulation_mode(
+    mode: str,
+    comparison_root: Optional[Path] = None,
+) -> dict[str, object]:
+    """
+    Run one concrete simulation mode.
+
+    Cohort selection always uses COHORT_REQUIRED_MOTION_COLUMNS and is therefore
+    identical across modes. The active mode changes only the simulated values.
+    """
+    config = activate_simulation_mode(mode)
+
+    print("\n================ ACTIVE SIMULATION ================")
+    print(f"Mode: {config.mode}")
+    print(f"Title: {SIMULATION_TITLE}")
+    print(f"Control points: {len(SIMULATION_Y)}")
+    print("Resolved source definitions:")
+    for label, spec in SIMULATION_VARIABLES.items():
+        print(f"  {label}: {spec}")
+    print("===================================================\n")
+
+    raw_data, columns = load_data()
+
+    # Determine hotspots before group selection
+    raw_data = add_hotspot_groups(raw_data)
+
+    data_group_columns = sorted({
+        str(condition[0])
+        for group in DATA_GROUPS
+        for condition in group.get("conditions", ())
+    })
+    missing_group_columns = [
+        column for column in data_group_columns
+        if column not in raw_data.columns
+    ]
+    if missing_group_columns:
+        raise KeyError(
+            "The following DATA_GROUPS columns are missing:\n"
+            + "\n".join(f"- {name}" for name in missing_group_columns)
+        )
+
+    # IMPORTANT: this filter is mode-independent.
+    motion_filtered, exclusion_report = filter_motion_complete_cases(
+        raw_data,
+        columns,
+    )
+    data, duplicate_report = deduplicate_patient_rows(
+        motion_filtered,
+        columns,
+    )
+
+    if comparison_root is not None:
+        base_output_directory = comparison_root / safe_filename(config.mode)
+    elif SEPARATE_OUTPUT_BY_MODE:
+        base_output_directory = OUTPUT_DIRECTORY / safe_filename(config.mode)
+    else:
+        base_output_directory = OUTPUT_DIRECTORY
+    base_output_directory.mkdir(parents=True, exist_ok=True)
+
+    exclusion_report.to_csv(
+        base_output_directory / "excluded_incomplete_motion_rows.csv",
+        index=False,
+    )
+    duplicate_report.to_csv(
+        base_output_directory / "duplicate_patient_id_rows.csv",
+        index=False,
+    )
+
+    pd.DataFrame(
+        [{
+            "raw_rows": len(raw_data),
+            "rows_with_complete_motion": len(motion_filtered),
+            "unique_patients_used": len(data),
+            "excluded_incomplete_motion_rows": len(raw_data) - len(motion_filtered),
+            "required_motion_value_count": len(COHORT_REQUIRED_MOTION_COLUMNS),
+            "anatomy_required_for_inclusion": False,
+            "deduplicate_patient_ids": DEDUPLICATE_PATIENT_IDS,
+            "simulation_mode": config.mode,
+        }]
+    ).to_csv(
+        base_output_directory / "filter_summary.csv",
+        index=False,
+    )
+
+    print_terminal_audit(
+        raw_data,
+        data,
+        columns,
+        exclusion_report,
+        duplicate_report,
+    )
+
+    motion_norm = robust_motion_norm(data, columns)
+    all_motion = data[
+        columns.motion_required_columns
+    ].to_numpy(dtype=float).ravel()
+    global_motion_fallback = finite_median(all_motion, 0.0)
+
+    group_averages: dict[str, tuple[SpineProfile, DenseGeometry]] = {}
+    comparison_averages: list[tuple[str, SpineProfile, DenseGeometry]] = []
+    group_summary: list[dict[str, object]] = []
+
+    if DATA_GROUPS:
+        workflows = [
+            (
+                safe_filename(str(group["name"])),
+                str(group["label"]),
+                select_data_group(data, group),
+                group,
+            )
+            for group in DATA_GROUPS
+        ]
+    else:
+        workflows = [
+            ("", "All patients", data.copy().reset_index(drop=True), None)
+        ]
+
+    for group_name, group_label, group_data, group_definition in workflows:
+        group_summary.append({
+            "group_name": group_name or "all_patients",
+            "group_label": group_label,
+            "conditions": (
+                repr(group_definition.get("conditions", ()))
+                if group_definition is not None
+                else "complete cohort"
+            ),
+            "patient_count": len(group_data),
+        })
+
+        print(f"{group_label}: {len(group_data)} patients")
+        if group_data.empty:
+            print(f"Skipping empty DATA group: {group_label}")
+            continue
+
+        group_output_directory = (
+            base_output_directory / group_name
+            if group_name
+            else base_output_directory
+        )
+
+        if comparison_root is not None:
+            # Comparison only: compute one mean profile, without individual plots.
+            average_row = population_average_row(group_data, columns)
+            average_profile = build_profile(
+                average_row, columns, global_motion_fallback,
+            )
+            average_geometry = dense_geometry(average_profile, GEOMETRY_POINTS_FULL)
+            group_averages[group_label] = (average_profile, average_geometry)
+            comparison_averages.append((group_label, average_profile, average_geometry))
+            continue
+
+        average_profile, average_geometry = run_standard_plots_for_data_group(
+            group_data,
+            columns,
+            motion_norm,
+            global_motion_fallback,
+            group_output_directory,
+            group_label,
+        )
+        group_averages[group_label] = (average_profile, average_geometry)
+        comparison_averages.append(
+            (group_label, average_profile, average_geometry)
+        )
+
+    pd.DataFrame(group_summary).to_csv(
+        base_output_directory / "comparison_group_summary.csv",
+        index=False,
+    )
+
+    if (
+        comparison_root is None
+        and DATA_GROUPS
+        and CREATE_POPULATION_AVERAGE_COMPARISON
+        and len(comparison_averages) >= 2
+    ):
+        fig = plot_population_average_comparison(
+            comparison_averages,
+            motion_norm,
+        )
+        fig.savefig(
+            base_output_directory / "06_population_average_comparison.png",
+            dpi=SAVE_DPI,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        plt.close(fig)
+
+    print(f"Finished mode '{config.mode}': {base_output_directory.resolve()}")
+    print(
+        f"Unique patients used before DATA subgroup selection: "
+        f"{len(data)} / {len(raw_data)} raw rows"
+    )
+
+    return {
+        "config": config,
+        "base_output_directory": base_output_directory,
+        "patient_count": len(data),
+        "raw_patient_count": len(raw_data),
+        "motion_norm": motion_norm,
+        "group_averages": group_averages,
+    }
+
+
+def run_comparison_mode() -> None:
+    """
+    Run all configured concrete modes and then create one additional figure
+    per DATA group (or one for the full cohort) containing the three population
+    averages as subplots.
+    """
+    comparison_root = OUTPUT_DIRECTORY / "comparison"
+    comparison_root.mkdir(parents=True, exist_ok=True)
+
+    results: list[dict[str, object]] = []
+    expected_patient_count: Optional[int] = None
+
+    for mode in selected_comparison_modes():
+        result = run_one_simulation_mode(
+            mode,
+            comparison_root=comparison_root,
+        )
+        patient_count = int(result["patient_count"])
+
+        if expected_patient_count is None:
+            expected_patient_count = patient_count
+        elif patient_count != expected_patient_count:
+            raise RuntimeError(
+                "Patient cohort changed between simulation modes. "
+                f"Expected {expected_patient_count}, got {patient_count} "
+                f"for mode {mode!r}. Cohort selection must be mode-independent."
+            )
+
+        results.append(result)
+
+    # Determine all group labels available in the mode results.
+    group_labels: list[str] = []
+    for result in results:
+        for label in result["group_averages"]:
+            if label not in group_labels:
+                group_labels.append(label)
+
+    for group_label in group_labels:
+        mode_averages = []
+
+        for result in results:
+            config = result["config"]
+            group_averages = result["group_averages"]
+
+            if group_label not in group_averages:
+                continue
+
+            profile, geometry = group_averages[group_label]
+            mode_averages.append(
+                (
+                    config.mode,
+                    config.title,
+                    profile,
+                    geometry,
+                    result["motion_norm"],
+                    config.colorbar_label,
+                )
+            )
+
+        if len(mode_averages) != len(selected_comparison_modes()):
+            print(
+                f"Skipping cross-mode comparison for {group_label!r}: "
+                f"only {len(mode_averages)} / {len(selected_comparison_modes())} "
+                "mode averages are available."
+            )
+            continue
+
+        fig = plot_simulation_mode_population_comparison(
+            group_label,
+            mode_averages,
+        )
+        filename = (
+            "population_average_modes_comparison_"
+            f"{safe_filename(group_label)}.png"
+        )
+        fig.savefig(
+            comparison_root / filename,
+            dpi=SAVE_DPI,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        if SHOW_FIGURES:
+            plt.show(block=True)
+        plt.close(fig)
+
+    print("\n================ COMPARISON FINISHED ================")
+    print(f"Modes: {', '.join(selected_comparison_modes())}")
+    print(f"Same cohort in all modes: {expected_patient_count} patients")
+    print(f"Output: {comparison_root.resolve()}")
+    print("=====================================================\n")
+
+
+def main() -> None:
+    requested_mode = str(SIMULATION_MODE).strip().lower()
+
+    if requested_mode == "comparison":
+        run_comparison_mode()
+    else:
+        run_one_simulation_mode(requested_mode)
+
+
+if __name__ == "__main__":
+    main()
+    if SHOW_FIGURES and str(SIMULATION_MODE).strip().lower() != "comparison":
+        plt.show()
